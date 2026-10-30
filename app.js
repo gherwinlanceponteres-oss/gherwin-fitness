@@ -43,7 +43,7 @@ function defaults() {
     program: clone(window.DEFAULT_PROGRAM),
     foods: clone(window.DEFAULT_FOODS),
     templates: clone(window.DEFAULT_TEMPLATES),
-    sessions: {}, runs: [], days: {}, weights: {}, checkins: [], deloads: {},
+    sessions: {}, runs: [], days: {}, weights: {}, checkins: [], deloads: {}, moves: {},
     customEx: [], myQuotes: [], exNotes: {},
     stock: { nitrotech: { size: 40, start: t, adj: 0, tubG: 1810, scoopG: 45 }, creatine: { size: 60, start: t, adj: 0, tubG: 300, scoopG: 5 } },
     grocery: {},
@@ -232,6 +232,7 @@ function exHistory(exId, before) {
   const out = [];
   for (const d of Object.keys(S.sessions).sort()) {
     if (before && d >= before) continue;
+    if (S.sessions[d].deload) continue; // deload days never count as strength data
     for (const e of S.sessions[d].entries) if (e.ex === exId) {
       const sets = e.sets.filter(x => x.done && num(x.r) > 0).map(x => ({ w: num(x.w) || 0, r: num(x.r) }));
       if (sets.length) out.push({ date: d, sets, best: Math.max(...sets.map(s => e1rm(s.w, s.r))) });
@@ -264,14 +265,17 @@ function suggest(item, date) {
 }
 const weekIdx = date => Math.floor(diffD(S.profile.programStart, monOf(date)) / 7);
 function isDeloadWeek(date) { const i = weekIdx(date), n = S.program.deloadEvery || 0; return n > 0 && i >= 0 && (i + 1) % n === 0; }
+const deloadW = (id, w) => { const inc = ex(id).inc || 2.5; return w > 0 ? Math.max(inc, Math.round(w * 0.6 / inc) * inc) : w; };
 function newEntry(it, date, deload) {
   const n = deload ? Math.ceil(it.sets / 2) : it.sets, sg = suggest(it, date);
-  const w = sg.w == null ? '' : (deload && sg.last ? Math.max(...sg.last.sets.map(s => s.w)) : sg.w);
+  const base = sg.last ? Math.max(...sg.last.sets.map(s => s.w)) : sg.w;
+  const w = sg.w == null ? '' : (deload ? deloadW(it.ex, base) : sg.w);
   return { ex: it.ex, ss: !!it.ss, t: { sets: it.sets, min: it.min, max: it.max }, sets: Array.from({ length: n }, () => ({ w, r: '', done: false })) };
 }
-function createSession(date, dayKey) {
-  const k = dayKey ?? dow(date), d = S.program.days[k], deload = isDeloadWeek(date) && S.deloads[monOf(date)] === 'yes';
-  S.sessions[date] = { dow: k, name: d.name, deload, done: false, entries: d.items.map(it => newEntry(it, date, deload)) };
+function createSession(date, dayKey, opt = {}) {
+  let k = dayKey ?? effKey(date); if (k === 'rest' || !S.program.days[k] || S.program.days[k].type !== 'gym') k = [1, 2, 3, 4, 5, 6, 0].find(x => S.program.days[x].type === 'gym');
+  const d = S.program.days[k], deload = !!opt.deload;
+  S.sessions[date] = { dow: k, name: d.name, deload, done: false, entries: d.items.map(it => ({ ...newEntry(it, date, deload), ss: !!it.ss })) };
   save(); return S.sessions[date];
 }
 function sessionPRs(date) {
@@ -286,9 +290,16 @@ function prCountBetween(a, b) {
 }
 const planned = date => S.program.days[dow(date)];
 const dayPick = {};
-const plannedFor = date => { const s = S.sessions[date]; if (s) return { ...S.program.days[s.dow], name: s.name }; return dayPick[date] != null ? S.program.days[dayPick[date]] : planned(date); };
+// S.moves[date] = { rest: true, to } (rest day taken, workout moved to "to") or { k, from } (workout moved in from "from")
+function effKey(date) { if (dayPick[date] != null) return dayPick[date]; const m = (S.moves || {})[date]; if (m && m.rest) return 'rest'; if (m && m.k != null) return m.k; return dow(date); }
+const plannedFor = date => {
+  const s = S.sessions[date]; if (s) return { ...S.program.days[s.dow], name: s.name };
+  const k = effKey(date), m = (S.moves || {})[date];
+  if (k === 'rest') return { type: 'rest', name: 'Rest day (you chose to rest)', items: [], moved: m };
+  return { ...S.program.days[k], moved: dayPick[date] == null ? m : null };
+};
 function dayStatus(date) {
-  const p = planned(date), s = S.sessions[date];
+  const p = plannedFor(date), s = S.sessions[date];
   if (s && s.done) return 'done';
   if (S.runs.some(r => r.date === date) && p.type === 'run') return 'done';
   if (date < S.created) return 'pre';
@@ -357,7 +368,7 @@ function growth() {
   else { res.head = 'Holding steady'; res.cls = 'acc'; res.line = 'Strength is flat — not losing, not gaining yet.'; }
   if (!consOK) res.tips.push(`You did ${doneN} of ${plannedN} planned sessions. Consistency comes first — use "Change today's workout" when the gym is crowded instead of skipping.`);
   if (!protOK) res.tips.push(`Protein target hit on only ${pHit} of ${pDays} days. Use the + button to log everything and the close-the-gap tips.`);
-  if (sDown || (strength && !sUp && consOK && protOK && !strength.sinceStart)) res.tips.push('Check sleep (7+ hours) and calories. If you feel run down, take a deload week.');
+  if (sDown || (strength && !sUp && consOK && protOK && !strength.sinceStart)) res.tips.push('Check sleep (7+ hours) and calories. If you feel run down, take a deload day (💤 on the workout card).');
   if (sleep && sleep < 7) res.tips.push(`You're averaging ${sleep} h of sleep. Under 7 h slows muscle growth and fat loss — it's the cheapest gain available.`);
   if (waistUp && goal === 'recomp') res.tips.push('Waist went up — trim about 150 kcal a day (the check-in screen can apply it).');
   if (wTrend && goal === 'recomp' && wTrend.perWeek < -0.5) res.tips.push('Weight is dropping fast for a recomp — eat closer to your calorie target to protect muscle.');
@@ -392,7 +403,7 @@ function coachNotes() {
   const nt = stockInfo('nitrotech'); if (nt.runout && diffD(t, nt.runout) <= 7) n.push(`Nitro-Tech runs out ${fmtD(nt.runout)} (${nt.left} scoops left) — it's on the grocery list.`);
   const cd = diffD(S.stock.creatine.start, t); if (cd >= 0 && cd <= 21) n.push(`Week ${Math.floor(cd / 7) + 1} on creatine: a 1–2 kg jump on the scale is water in the muscle, not fat.`);
   if (planned(t).type === 'run') n.push(`Run day: long-run target ${nextLongRun()} km at an easy pace.`);
-  if (isDeloadWeek(t) && S.deloads[mon] !== 'no') n.push('Deload week suggested: same exercises, half the sets.');
+
   return n.slice(0, 4);
 }
 
@@ -406,7 +417,7 @@ const Sync = {
   saveMeta() { localStorage.setItem(META_KEY, JSON.stringify(this.meta)); },
   saveSess() { if (this.sess) localStorage.setItem(SESS_KEY, JSON.stringify(this.sess)); else localStorage.removeItem(SESS_KEY); },
   parts(st = S) {
-    const core = {}; for (const k of ['v', 'created', 'profile', 'overrides', 'program', 'foods', 'templates', 'stock', 'settings', 'deloads', 'lastBackup', 'customEx', 'myQuotes', 'grocery', 'exNotes']) core[k] = st[k];
+    const core = {}; for (const k of ['v', 'created', 'profile', 'overrides', 'program', 'foods', 'templates', 'stock', 'settings', 'deloads', 'lastBackup', 'customEx', 'myQuotes', 'grocery', 'exNotes', 'moves']) core[k] = st[k];
     const out = { core, body: { weights: st.weights, checkins: st.checkins, runs: st.runs } };
     for (const [d, v] of Object.entries(st.sessions)) (out['sessions_' + d.slice(0, 7)] ||= {})[d] = v;
     for (const [d, v] of Object.entries(st.days)) (out['days_' + d.slice(0, 7)] ||= {})[d] = v;
@@ -742,12 +753,14 @@ VIEWS.today = () => {
   let w = `<div class="card"><div class="label">${DNL[dow(t)]} · workout</div>`;
   if (p.type === 'gym') {
     const doneSets = s ? s.entries.reduce((a, e) => a + e.sets.filter(x => x.done).length, 0) : 0, totSets = s ? s.entries.reduce((a, e) => a + e.sets.length, 0) : p.items.reduce((a, i) => a + i.sets, 0);
-    w += `<div class="row between" style="margin-top:4px"><div class="grow"><h2 style="margin:0">${esc(p.name)}</h2><div class="small muted">${s ? s.entries.length : p.items.length} exercises · ${totSets} sets${s && !s.done ? ` · ${doneSets} done` : ''}</div></div>${s && s.done ? `<span class="pill good">Done ✓</span>` : `<button class="btn primary" data-a="play" data-date="${t}">${s ? 'Resume' : 'Start'}</button>`}</div>`;
+    w += `<div class="row between" style="margin-top:4px"><div class="grow"><h2 style="margin:0">${esc(p.name)}</h2><div class="small muted">${s ? s.entries.length : p.items.length} exercises · ${totSets} sets${s && !s.done ? ` · ${doneSets} done` : ''}</div></div>${s && s.done ? `<span class="pill good">Done ✓</span>` : `<button class="btn primary" data-a="play" data-date="${t}">${s && s.startedAt ? 'Resume' : 'Start'}</button>`}</div>`;
     if (!s) w += `<button class="linkbtn" data-a="switchDay" data-d="${t}">Gym crowded? Switch workout ›</button>`;
+    w += workoutButtons(t, p, s);
   } else if (p.type === 'run') {
     const run = S.runs.find(r => r.date === t);
     w += `<div class="row between" style="margin-top:4px"><div class="grow"><h2 style="margin:0">${esc(p.name)}</h2><div class="small muted">${run ? `${run.km} km in ${fmtTime(run.sec)} (${pace(run.sec, run.km)})` : `Target: ${nextLongRun()} km easy`}</div></div>${run ? `<span class="pill good">Done ✓</span>` : `<button class="btn primary sm" data-a="go" data-t="train" data-s="runs">Log run</button>`}</div>`;
-  } else w += `<h2 style="margin:4px 0 0">${esc(p.name)}</h2><div class="small muted">Recover. Walk, stretch, sleep well.</div>`;
+    if (!run) w += workoutButtons(t, p, s);
+  } else w += `<h2 style="margin:4px 0 0">${esc(p.name)}</h2><div class="small muted">Recover. Walk, stretch, sleep well.</div>${workoutButtons(t, p, s)}`;
   h += w + `</div>` + growthCard(false);
   const pg = proteinGap(t), gap = pg > 10 ? closeGap(pg) : null;
   h += `<div class="card tap" data-a="nutriHelp"><div class="row between"><div class="label">Nutrition · <span class="acc">tap for what to eat ›</span></div><button class="btn sm" data-a="logFood">+ Log food</button></div>${macroCard(t, T)}${gap ? `<div class="sug">Today's plan is ${pg} g protein short. Close the gap: ${esc(gap)}</div>` : ''}</div>`;
@@ -772,25 +785,23 @@ VIEWS.session = () => {
   let h = weekStrip(date);
   const dLabel = `${fmtD(date)}${isToday ? ' · Today' : ''}`;
   if (!s) {
-    const del = isDeloadWeek(date) && S.deloads[monOf(date)] !== 'no' && p.type === 'gym';
     if (p.type !== 'gym') {
-      h += `<div class="hero"><div class="label">${dLabel}</div><h2>${esc(p.name)}</h2><div class="small muted">${p.type === 'run' ? `Long-run target ${nextLongRun()} km at an easy pace.` : 'Recovery is when muscle is built. Walk, stretch, sleep.'}</div><div class="row" style="margin-top:14px">${p.type === 'run' ? `<button class="btn primary grow" data-a="sub" data-s="runs">Log run</button>` : ''}<button class="btn grow" data-a="switchDay" data-d="${date}">Train a gym workout instead</button></div></div>`;
+      h += `<div class="hero"><div class="label">${dLabel}</div><h2>${esc(p.name)}</h2><div class="small muted">${p.type === 'run' ? `Long-run target ${nextLongRun()} km at an easy pace.` : 'Recovery is when muscle is built. Walk, stretch, sleep.'}</div><div class="row" style="margin-top:14px">${p.type === 'run' ? `<button class="btn primary grow" data-a="sub" data-s="runs">Log run</button>` : ''}<button class="btn grow" data-a="switchDay" data-d="${date}">Train a gym workout instead</button></div>${date >= today() ? workoutButtons(date, p, null) : ''}</div>`;
       return h;
     }
     const items = p.items, sets = items.reduce((a, i) => a + i.sets, 0);
     const dc = dayCheck(dayPick[date] ?? dow(date));
     h += `<div class="hero"><div class="label">${dLabel}</div><h2>${esc(p.name)}</h2><div class="mchips">${musclesOf(items).map(m => `<span class="mchip">${esc(m)}</span>`).join('')}${dc && dc.tracked.length >= 2 ? `<button class="mchip" data-a="sub" data-s="check" style="border:none" >${dc.v.cls === 'good' ? '✓' : dc.v.cls === 'bad' ? '⚠' : '●'} ${esc(dc.v.head)}</button>` : ''}</div>
       <div class="hstats"><div><b>${items.length}</b><span>exercises</span></div><div><b>${sets}</b><span>sets</span></div><div><b>~${estMinutes(items)}</b><span>minutes</span></div></div>
-      ${del ? `<div class="sug" style="margin:0 0 12px">Deload week: same exercises and weights, half the sets — lets joints and nerves recover. ${S.deloads[monOf(date)] === 'yes' ? '<b>On.</b>' : `<button class="btn sm" data-a="deload" data-v="yes">Use deload</button> <button class="btn sm ghost" data-a="deload" data-v="no">Skip</button>`}</div>` : ''}
-      <button class="btn primary block big-btn" data-a="play" data-date="${date}">▶ Start workout</button><div class="row between"><button class="linkbtn" data-a="switchDay" data-d="${date}">Gym crowded? Switch workout ›</button><button class="linkbtn" data-a="reorderDay" data-date="${date}">⇅ Change order</button></div></div>`;
+      <button class="btn primary block big-btn" data-a="play" data-date="${date}">▶ Start workout</button><div class="row between"><button class="linkbtn" data-a="switchDay" data-d="${date}">Gym crowded? Switch workout ›</button><button class="linkbtn" data-a="reorderDay" data-date="${date}">⇅ Change order</button></div>${date >= today() ? workoutButtons(date, p, null) : ''}</div>`;
     h += `<div class="sect">Exercises</div>` + items.map((it, i) => { const e = ex(it.ex), sg = suggest(it, date); return `<div class="exrow" data-a="demo" data-ex="${it.ex}"><span class="num">${i + 1}</span>${thumb(it.ex, 54)}<div class="grow"><b>${esc(e.name)}</b><div class="tiny muted">${it.sets} × ${it.min}–${it.max} reps${sg.lastStr ? ` · last ${sg.lastStr}` : ''}</div><span class="tchip">${sg.w ? `Today: ${kg(sg.w)}` : sg.last ? 'Bodyweight' : 'First time — find your weight'}</span>${it.ss ? ' <span class="tchip" style="background:var(--info-soft);color:var(--info)">🔗 superset ↓</span>' : ''}</div><span class="chev">›</span></div>`; }).join('');
     return h;
   }
   const doneSets = s.entries.reduce((a, e) => a + e.sets.filter(z => z.done).length, 0), totSets = s.entries.reduce((a, e) => a + e.sets.length, 0);
   const vol = s.entries.reduce((a, e) => a + e.sets.filter(z => z.done).reduce((b, z) => b + (num(z.w) || 0) * (num(z.r) || 0), 0), 0), prs = s.done ? sessionPRs(date) : [];
-  h += `<div class="hero"><div class="label">${dLabel} · ${s.done ? '<span class="good">Completed</span>' : s.startedAt ? '<span class="acc">In progress</span>' : '<span class="acc">Ready — order set</span>'}</div><h2>${esc(s.name)}</h2>
+  h += `<div class="hero"><div class="label">${dLabel} · ${s.done ? '<span class="good">Completed</span>' : s.startedAt ? '<span class="acc">In progress</span>' : s.deload ? '<span class="acc">💤 Deload day</span>' : '<span class="acc">Ready — order set</span>'}</div><h2>${esc(s.name)}</h2>
     <div class="hstats"><div><b>${doneSets}/${totSets}</b><span>sets done</span></div><div><b>${Math.round(vol).toLocaleString()}</b><span>kg volume</span></div><div><b>${s.startedAt ? Math.max(1, Math.round(((s.endedAt || Date.now()) - s.startedAt) / 60000)) : '–'}</b><span>minutes</span></div></div>
-    ${prs.length ? `<div class="sug" style="margin:0 0 12px">New PR${prs.length > 1 ? 's' : ''}: ${esc(prs.map(id => ex(id).name).join(', '))}</div>` : ''}
+    ${prs.length ? `<div class="sug" style="margin:0 0 12px">New PR${prs.length > 1 ? 's' : ''}: ${esc(prs.map(id => ex(id).name).join(', '))}</div>` : ''}${date >= today() ? workoutButtons(date, p, s) : s.deload ? '<div class="sug" style="margin:0 0 12px">💤 Deload day</div>' : ''}
     ${s.done ? `<button class="btn block" data-a="reopen">Edit / continue workout</button>` : `<button class="btn primary block big-btn" data-a="play" data-date="${date}">▶ ${s.startedAt ? 'Resume' : 'Start'} workout</button><button class="btn danger block" style="margin-top:8px" data-a="cancelSession" data-date="${date}">✕ Cancel workout & start over</button>`}</div>`;
   h += `<div class="row between"><div class="sect">Exercises</div><button class="linkbtn" style="padding:0" data-a="reorderDay" data-date="${date}">⇅ Change order</button></div>` + s.entries.map((e, i) => { const x = ex(e.ex), d = e.sets.filter(z => z.done); return `<div class="exrow ${d.length === e.sets.length ? 'donex' : ''}" data-a="${s.done ? 'demo' : 'playAt'}" data-i="${i}" data-ex="${e.ex}"><span class="num">${d.length === e.sets.length ? '✓' : i + 1}</span>${thumb(e.ex, 54)}<div class="grow"><b>${esc(x.name)}</b><div class="tiny muted">${d.length}/${e.sets.length} sets${d.length ? ' · ' + d.map(z => (z.w ? r1(z.w) + '×' : 'BW×') + z.r).join(', ') : ''}</div></div><span class="chev">›</span></div>`; }).join('');
   h += `<button class="btn block" style="margin-top:6px" data-a="toggleLog">${ctx.showLog ? 'Hide' : 'Edit'} workout log</button>`;
@@ -828,7 +839,7 @@ function dayCheck(k) {
 function checkTips(c) {
   const t = []; if (!c || c.tracked.length < 2 || c.v.cls === 'good') return t;
   for (const r of c.stalled.slice(0, 4)) { const e = ex(r.id), nx = e.prog[0] ? ex(e.prog[0].to) : null; t.push({ i: r.i, text: nx ? `${e.name}: stuck — switch to ${nx.name}` : `${e.name}: stuck — change reps to ${c.day.items[r.i].min <= 8 ? '10–15 lighter' : '6–8 heavier'} for 4 weeks`, to: nx ? nx.id : null, reps: !nx }); }
-  if (c.weeks >= 8 && c.v.cls === 'bad') t.push({ text: `You're in week ${c.weeks}. A deload week (half the sets) often restarts progress.` });
+  if (c.v.cls === 'bad') t.push({ text: 'A deload day (💤 on the workout card) or two often restarts progress.' });
   return t;
 }
 VIEWS.check = () => {
@@ -844,6 +855,30 @@ VIEWS.check = () => {
   }
   return h + `<div class="tiny faint">"Improving" = estimated 1-rep max up more than 2% over your last sessions. "Stuck" = no new best in the last 3 sessions.</div>`;
 };
+// ---------- deload days & "rest today" ----------
+function deloadNudge(date) {
+  if (date !== today()) return null; const why = [];
+  const sl = (S.days[addD(date, -0)] || {}).sleep ?? (S.days[addD(date, -1)] || {}).sleep; if (sl && sl < 6) why.push(`only ${sl} h sleep`);
+  let run = 0; for (let i = 1; i <= 10; i++) { const d = addD(date, -i), x = S.sessions[d]; if ((x && x.done) || S.runs.some(r => r.date === d)) run++; else break; } if (run >= 6) why.push(`${run} training days in a row`);
+  const real = Object.keys(S.sessions).filter(d => d < date && S.sessions[d].done && !S.sessions[d].deload).sort().slice(-2);
+  const weaker = d => { const es = S.sessions[d].entries.map(e => { const h = exHistory(e.ex), i = h.findIndex(x => x.date === d); return i > 0 ? h[i].best < Math.max(...h.slice(0, i).map(x => x.best)) * 0.97 : null; }).filter(v => v !== null); return es.length >= 2 && es.filter(Boolean).length / es.length >= 0.5; };
+  if (real.length === 2 && real.every(weaker)) why.push('your last 2 workouts were weaker than usual');
+  return why.length ? `Rough patch — ${why.join(', ')}. Consider a deload today.` : null;
+}
+const deloadsLast7 = date => Object.keys(S.sessions).filter(d => d <= date && diffD(d, date) < 7 && S.sessions[d].deload).length;
+function nextRestDay(date) { for (let i = 1; i <= 7; i++) { const d = addD(date, i); if (!S.sessions[d] && !(S.moves || {})[d] && dayPick[d] == null && planned(d).type === 'rest') return d; } return null; }
+function workoutButtons(date, p, s) {
+  // extra choices under a not-yet-started workout card
+  const m = (S.moves || {})[date], b = [];
+  if (p.type === 'rest' && m && m.rest) return `<div class="sug">😴 You're resting today — <b>${esc(S.program.days[m.k0] ? S.program.days[m.k0].name : 'your workout')}</b> moved to <b>${fmtD(m.to)}</b>. <button class="btn sm" data-a="undoMove" data-d="${date}">Undo — train today</button></div>`;
+  if (s && s.deload && !s.done) return `<div class="sug">💤 Deload day: half the sets at ~60% weight. Doesn't count against your strength progress.${s.entries.some(e => e.sets.some(z => z.done)) ? '' : ` <button class="btn sm" data-a="undoDeload" data-d="${date}">Undo — normal workout</button>`}</div>`;
+  if (s && (s.done || s.entries.some(e => e.sets.some(z => z.done)))) return '';
+  const nudge = deloadNudge(date), many = deloadsLast7(date) >= 2;
+  if (p.type === 'gym') b.push(`<button class="btn sm" data-a="deloadDay" data-d="${date}">💤 Deload today</button>`);
+  else b.push(`<button class="btn sm" data-a="switchDay" data-d="${date}" data-deload="1">💤 Light session</button>`);
+  if (p.type !== 'rest') b.push(`<button class="btn sm" data-a="restToday" data-d="${date}">😴 Rest today</button>`);
+  return `${p.moved && p.moved.from ? `<div class="tiny muted" style="margin-top:6px">↪ Moved here from ${fmtD(p.moved.from)}. <button class="linkbtn" style="padding:0" data-a="undoMove" data-d="${p.moved.from}">Undo</button></div>` : ''}${nudge ? `<div class="sug">${esc(nudge)}</div>` : ''}${many ? `<div class="tiny muted" style="margin-top:6px">That's ${deloadsLast7(date)} deload days this week — if you're often this tired, check sleep and calories.</div>` : ''}<div class="row wrap" style="gap:6px;margin-top:8px">${b.join('')}</div>`;
+}
 const shortName = n => n.replace('Cardio — run', 'Run').replace(/\(.*?\)/g, '').split(/[+/]/).map(w => { w = w.trim().split(' ')[0]; return w.length > 7 ? w.slice(0, 5) + '.' : w; }).filter(Boolean).join(' ');
 VIEWS.month = () => {
   const [Y, M] = ctx.month.split('-').map(Number), start = monOf(`${Y}-${pad(M)}-01`);
@@ -851,12 +886,12 @@ VIEWS.month = () => {
   let d = start;
   for (let i = 0; i < 42; i++) {
     if (i === 35 && pd(d).getMonth() !== M - 1) break;
-    const p = plannedFor(d), st = dayStatus(d), out = pd(d).getMonth() !== M - 1, del = isDeloadWeek(d) && S.deloads[monOf(d)] !== 'no' && p.type === 'gym', swapped = S.sessions[d] && S.sessions[d].dow !== dow(d);
-    h += `<div class="d ${out ? 'out' : ''} ${d === today() ? 'today' : ''}" data-a="openDay" data-date="${d}"><div class="row between"><span class="n">${pd(d).getDate()}</span>${st !== 'rest' && st !== 'pre' ? `<span class="dot ${del && st === 'plan' ? 'del' : st}"></span>` : ''}</div><div class="t">${swapped ? '↔ ' : ''}${esc(shortName(p.name))}</div></div>`;
+    const p = plannedFor(d), st = dayStatus(d), out = pd(d).getMonth() !== M - 1, del = S.sessions[d] && S.sessions[d].deload, swapped = (S.sessions[d] && S.sessions[d].dow !== dow(d)) || !!(S.moves || {})[d];
+    h += `<div class="d ${out ? 'out' : ''} ${d === today() ? 'today' : ''}" data-a="openDay" data-date="${d}"><div class="row between"><span class="n">${pd(d).getDate()}</span>${st !== 'rest' && st !== 'pre' ? `<span class="dot ${st}"></span>` : ''}</div><div class="t">${del ? '💤 ' : swapped ? '↔ ' : ''}${esc(p.type === 'rest' && p.moved ? 'Rest' : shortName(p.name))}</div></div>`;
     d = addD(d, 1);
   }
   const doneM = Object.keys(S.sessions).filter(k => k.startsWith(ctx.month) && S.sessions[k].done).length + S.runs.filter(r => r.date.startsWith(ctx.month)).length;
-  return h + `</div><div class="row wrap small muted" style="margin-top:10px;gap:14px"><span><span class="dot done"></span> done</span><span><span class="dot miss"></span> missed</span><span><span class="dot plan"></span> planned</span><span><span class="dot del"></span> deload</span><span>↔ switched day</span></div>
+  return h + `</div><div class="row wrap small muted" style="margin-top:10px;gap:14px"><span><span class="dot done"></span> done</span><span><span class="dot miss"></span> missed</span><span><span class="dot plan"></span> planned</span><span>💤 deload day</span><span>↔ switched / moved</span></div>
   <div class="card" style="margin-top:12px"><div class="kpis"><div class="kpi"><b>${doneM}</b><span>sessions this month</span></div><div class="kpi"><b>${streak()}</b><span>day streak</span></div><div class="kpi"><b>Week ${weekIdx(today()) + 1}</b><span>of training block</span></div></div></div>`;
 };
 
@@ -881,7 +916,7 @@ VIEWS.program = () => {
     }
     h += `</div>`;
   }
-  return h + `<div class="card"><label class="f">Suggest a deload week every … weeks (0 = never)</label><input type="number" data-c="deloadEvery" value="${S.program.deloadEvery}"></div>${saveBtn('Save split')}<br><button class="btn danger sm" data-a="resetProgram">Reset split to the original plan</button>`;
+  return h + `${saveBtn('Save split')}<br><button class="btn danger sm" data-a="resetProgram">Reset split to the original plan</button>`;
 };
 
 VIEWS.volume = () => {
@@ -1192,7 +1227,7 @@ function playerTick() {
 }
 function renderPlayer() {
   if (!P) return; const s = S.sessions[P.date], e = s.entries[P.ei], x = ex(e.ex), set = e.sets[P.si];
-  const head = `<div class="p-top"><button class="iconbtn" data-a="pMenu" aria-label="Stop or cancel workout">✕</button><div class="grow" style="text-align:center"><div class="tiny muted">${esc(s.name)} · ${P.ei + 1}/${s.entries.length}</div><div class="p-elapsed" id="pElapsed">${fmtTime(((P.paused ? P.pausedAt : Date.now()) - s.startedAt) / 1000)}</div></div><button class="btn sm" data-a="pPause" style="width:auto">${P.paused ? '▶ Resume' : '⏸ Pause'}</button></div>${P.paused ? `<div class="card hl" style="margin:10px 0 0;text-align:center"><b style="font-size:18px">⏸ Workout paused</b><div class="small muted">Timers are frozen. Nothing is lost.</div><div class="row" style="margin-top:10px"><button class="btn primary grow" data-a="pPause">▶ Resume</button><button class="btn danger grow" data-a="pCancel">Cancel workout</button></div></div>` : ''}<div class="row" style="justify-content:center;gap:6px;margin-top:6px"><button class="sdot ${S.settings.autoFlow ? 'cur' : ''}" data-a="tglAuto">${S.settings.autoFlow ? '✓ ' : ''}Auto-continue</button><button class="sdot ${S.settings.handsFree ? 'cur' : ''}" data-a="tglHF">${S.settings.handsFree ? '✓ ' : ''}Hands-free</button><button class="sdot ${notifOn() ? 'cur' : ''}" data-a="tglNotif">${notifOn() ? '🔔' : '🔕'} Lock-screen</button></div><div class="p-prog"><i style="width:${(s.entries.reduce((a, q) => a + q.sets.filter(z => z.done).length, 0) / Math.max(1, s.entries.reduce((a, q) => a + q.sets.length, 0))) * 100}%"></i></div>`;
+  const head = `<div class="p-top"><button class="iconbtn" data-a="pMenu" aria-label="Stop or cancel workout">✕</button><div class="grow" style="text-align:center"><div class="tiny muted">${s.deload ? '💤 ' : ''}${esc(s.name)} · ${P.ei + 1}/${s.entries.length}</div><div class="p-elapsed" id="pElapsed">${fmtTime(((P.paused ? P.pausedAt : Date.now()) - s.startedAt) / 1000)}</div></div><button class="btn sm" data-a="pPause" style="width:auto">${P.paused ? '▶ Resume' : '⏸ Pause'}</button></div>${P.paused ? `<div class="card hl" style="margin:10px 0 0;text-align:center"><b style="font-size:18px">⏸ Workout paused</b><div class="small muted">Timers are frozen. Nothing is lost.</div><div class="row" style="margin-top:10px"><button class="btn primary grow" data-a="pPause">▶ Resume</button><button class="btn danger grow" data-a="pCancel">Cancel workout</button></div></div>` : ''}<div class="row" style="justify-content:center;gap:6px;margin-top:6px"><button class="sdot ${S.settings.autoFlow ? 'cur' : ''}" data-a="tglAuto">${S.settings.autoFlow ? '✓ ' : ''}Auto-continue</button><button class="sdot ${S.settings.handsFree ? 'cur' : ''}" data-a="tglHF">${S.settings.handsFree ? '✓ ' : ''}Hands-free</button><button class="sdot ${notifOn() ? 'cur' : ''}" data-a="tglNotif">${notifOn() ? '🔔' : '🔕'} Lock-screen</button></div><div class="p-prog"><i style="width:${(s.entries.reduce((a, q) => a + q.sets.filter(z => z.done).length, 0) / Math.max(1, s.entries.reduce((a, q) => a + q.sets.length, 0))) * 100}%"></i></div>`;
   const demo = id => demoSrc(id) ? `<img class="p-demo" id="pDemo" data-ex="${id}" src="${demoSrc(id)}" alt="" data-a="demo" data-ex2="${id}" onerror="this.style.display='none'">` : `<div class="p-demo ph">${esc(ex(id).name.slice(0, 1))}</div>`;
   const restBlock = P.restEnd ? `<div class="p-restline"><span>Rest</span><b id="pRest">${fmtTime(Math.ceil((P.restEnd - Date.now()) / 1000))}</b><div class="bar grow"><i id="pRestBar" style="width:0%"></i></div><button class="btn sm" data-a="pRestAdd">+30s</button></div>` : '';
   let body = '';
@@ -1418,17 +1453,58 @@ A.nutriAdd = el => {
 A.nutriPlan = el => { const d = today(), rec = dayRec(d, true), it = dayItems(d).find(i => i.key === el.dataset.k); rec.items[el.dataset.k] = { food: it.food, qty: it.qty, done: true }; save(); render(true); toast(`Ticked ${food(it.food).name}`); nutriSheet(); };
 A.checkSwap = el => { const it = S.program.days[el.dataset.k].items[+el.dataset.i], from = ex(it.ex).name; it.ex = el.dataset.to; save(); render(true); toast(`${from} → ${ex(it.ex).name} in your split`); };
 A.checkReps = el => { const it = S.program.days[el.dataset.k].items[+el.dataset.i]; if (it.min <= 8) { it.min = 10; it.max = 15; } else { it.min = 6; it.max = 8; } save(); render(true); toast(`${ex(it.ex).name}: now ${it.min}–${it.max} reps`); };
+const hasDone = s => s && s.entries.some(e => e.sets.some(z => z.done));
+A.deloadDay = el => {
+  const d = el.dataset.d, s = S.sessions[d];
+  if (hasDone(s)) { applyDeload(s); save(); render(true); return toast('Rest of this workout switched to deload'); }
+  const k = s ? s.dow : effKey(d); delete S.sessions[d]; createSession(d, k, { deload: true }); render(true);
+  toast('💤 Deload day — half the sets at ~60% weight');
+};
+A.undoDeload = el => { const d = el.dataset.d, s = S.sessions[d]; if (hasDone(s)) return; const k = s.dow; delete S.sessions[d]; if (k !== dow(d) && (S.moves || {})[d] == null) dayPick[d] = k; save(); render(true); toast('Back to your normal workout'); };
+function applyDeload(s) {
+  s.deload = true;
+  s.entries = s.entries.map(e => {
+    const dn = e.sets.filter(z => z.done).length;
+    if (!dn) return { ...newEntry({ ex: e.ex, ...e.t }, today(), true), ss: e.ss };
+    const keep = Math.max(0, Math.ceil(e.t.sets / 2) - dn); let left = keep;
+    e.sets = e.sets.filter(z => z.done || left-- > 0).map(z => (z.done ? z : { ...z, w: deloadW(e.ex, num(z.w) || 0) || z.w }));
+    return e;
+  });
+}
+A.restToday = el => {
+  const d = el.dataset.d, s = S.sessions[d];
+  if (hasDone(s)) return toast('You already logged sets today — use ✕ › Finish now instead.');
+  const k = s ? s.dow : effKey(d), name = S.program.days[k].name, to = nextRestDay(d);
+  if (!to) {
+    ctx.moveFrom = { d, k };
+    return openModal(`<div class="row between"><h2 style="margin:0">Rest today</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">No free rest day in the next 7 days. Pick a day to do <b>${esc(name)}</b> instead — that day's own plan is replaced.</div>` +
+      [1, 2, 3, 4, 5, 6, 7].map(i => addD(d, i)).filter(x => !S.sessions[x] && !(S.moves || {})[x]).map(x => `<div class="daycard" data-a="moveTo" data-to="${x}"><div class="dl">${DN[dow(x)]}</div><div class="grow"><b>${fmtD(x)}</b><div class="tiny muted">now: ${esc(plannedFor(x).name)}</div></div></div>`).join(''));
+  }
+  doMove(d, k, to);
+};
+function doMove(d, k, to) {
+  S.moves = S.moves || {}; delete S.sessions[d]; delete dayPick[d];
+  S.moves[d] = { rest: true, to, k0: k }; S.moves[to] = { k, from: d };
+  save(); closeModal(); render(true); toast(`😴 Rest today ✓ — ${S.program.days[k].name} moved to ${fmtD(to)}`);
+}
+A.moveTo = el => doMove(ctx.moveFrom.d, ctx.moveFrom.k, el.dataset.to);
+A.undoMove = el => {
+  const d = el.dataset.d, m = (S.moves || {})[d]; if (!m) return; const to = m.to;
+  if (to && hasDone(S.sessions[to])) return toast(`You already trained it on ${fmtD(to)}.`);
+  if (to) { delete S.sessions[to]; delete S.moves[to]; } delete S.moves[d]; save(); render(true); toast('Undone — back to your normal plan');
+};
+A.pDeload = () => { const s = S.sessions[P.date]; applyDeload(s); save(); closeModal(); const e = s.entries[P.ei], j = e.sets.findIndex(z => !z.done); if (j >= 0) { P.si = j; if (P.phase !== 'rest') P.phase = 'work'; } else { const ni = s.entries.findIndex(q => q.sets.some(z => !z.done)); if (ni >= 0) { P.ei = ni; P.si = s.entries[ni].sets.findIndex(z => !z.done); P.phase = 'work'; } else P.phase = 'choice'; } renderPlayer(); toast('💤 Switched to deload — fewer, lighter sets'); };
 A.toggleLog = () => { ctx.showLog = !ctx.showLog; render(true); };
 A.switchDay = el => {
-  const d = el.dataset.d, cur = dayPick[d] ?? (S.sessions[d] ? S.sessions[d].dow : dow(d));
-  openModal(`<div class="row between"><h2 style="margin:0">Switch workout</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">For ${fmtD(d)} only — your weekly split stays the same.</div>` +
-    [1, 2, 3, 4, 5, 6, 0].filter(k => S.program.days[k].type === 'gym').map(k => { const day = S.program.days[k]; return `<div class="daycard ${+cur === k ? 'on' : ''}" data-a="pickDayCard" data-d="${d}" data-k="${k}"><div class="dl">${DN[k]}</div><div class="grow"><b>${esc(day.name)}</b><div class="tiny muted">${day.items.length} exercises · ~${estMinutes(day.items)} min · ${esc(musclesOf(day.items).join(', '))}</div></div>${+cur === k ? '<span class="pill acc">Current</span>' : ''}</div>`; }).join(''));
+  const d = el.dataset.d, light = el.dataset.deload === '1', cur = light ? -1 : (S.sessions[d] ? S.sessions[d].dow : effKey(d));
+  openModal(`<div class="row between"><h2 style="margin:0">${light ? '💤 Light session' : 'Switch workout'}</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">${light ? `Pick a workout to do as a deload — half the sets at ~60% weight. Doesn't affect your strength progress.` : `For ${fmtD(d)} only — your weekly split stays the same.`}</div>` +
+    [1, 2, 3, 4, 5, 6, 0].filter(k => S.program.days[k].type === 'gym').map(k => { const day = S.program.days[k]; return `<div class="daycard ${+cur === k ? 'on' : ''}" data-a="pickDayCard" data-d="${d}" data-k="${k}" ${light ? 'data-deload="1"' : ''}><div class="dl">${DN[k]}</div><div class="grow"><b>${esc(day.name)}</b><div class="tiny muted">${day.items.length} exercises · ~${estMinutes(day.items)} min · ${esc(musclesOf(day.items).join(', '))}</div></div>${+cur === k ? '<span class="pill acc">Current</span>' : ''}</div>`; }).join(''));
 };
-A.pickDayCard = el => { const d = el.dataset.d, k = +el.dataset.k; if (S.sessions[d] && S.sessions[d].entries.some(e => e.sets.some(z => z.done))) { closeModal(); return toast('This workout already has sets logged — discard it first in "Edit workout log".'); } delete S.sessions[d]; dayPick[d] = k; save(); closeModal(); render(true); toast(`${fmtD(d)}: ${S.program.days[k].name}`); };
+A.pickDayCard = el => { const d = el.dataset.d, k = +el.dataset.k; if (S.sessions[d] && S.sessions[d].entries.some(e => e.sets.some(z => z.done))) { closeModal(); return toast('This workout already has sets logged — discard it first in "Edit workout log".'); } delete S.sessions[d]; dayPick[d] = k; if (el.dataset.deload === '1') createSession(d, k, { deload: true }); save(); closeModal(); render(true); toast(`${fmtD(d)}: ${S.program.days[k].name}${el.dataset.deload === '1' ? ' (deload)' : ''}`); };
 A.pMenu = () => {
   const s = S.sessions[P.date], done = s.entries.reduce((a, e) => a + e.sets.filter(z => z.done).length, 0);
   openModal(`<div class="row between"><h2 style="margin:0">Stop workout?</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">${done} set${done === 1 ? '' : 's'} logged so far.</div>
-  <div class="col" style="gap:8px"><button class="btn block" data-a="pStop">⏸ Pause & close — continue later</button>${done ? `<button class="btn block" data-a="pFinishNow">✓ Finish now — save ${done} set${done === 1 ? '' : 's'}</button>` : ''}<button class="btn danger block" data-a="pCancel">✕ Cancel workout — delete it & start over</button><button class="btn primary block" data-a="close">Keep training</button></div>`);
+  <div class="col" style="gap:8px">${s.deload ? '' : `<button class="btn block" data-a="pDeload">💤 Feeling low — switch the rest to deload</button>`}<button class="btn block" data-a="pStop">⏸ Pause & close — continue later</button>${done ? `<button class="btn block" data-a="pFinishNow">✓ Finish now — save ${done} set${done === 1 ? '' : 's'}</button>` : ''}<button class="btn danger block" data-a="pCancel">✕ Cancel workout — delete it & start over</button><button class="btn primary block" data-a="close">Keep training</button></div>`);
 };
 function setPaused(on) {
   if (!P || !!P.paused === on) return; const s = S.sessions[P.date];
