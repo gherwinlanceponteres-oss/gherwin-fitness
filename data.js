@@ -246,3 +246,45 @@ window.QUOTES = [
 "a": "Henry David Thoreau, Walden"
 }
 ];
+
+// Ready-made programs the app can suggest when you outgrow your split. [exercise, sets, min reps, max reps]
+(() => {
+  const D = (name, list) => ({ type: 'gym', name, items: list.map(([ex, sets, min, max]) => ({ ex, sets, min, max })) });
+  const RUN = { type: 'run', name: 'Cardio — run', items: [] }, REST = { type: 'rest', name: 'Rest', items: [] };
+  const LEGS = D('Legs + abs', [['smith_squat', 3, 6, 10], ['smith_rdl', 3, 8, 10], ['leg_ext', 3, 10, 15], ['leg_curl', 3, 10, 15], ['calf', 4, 10, 15], ['hanging_knee', 3, 10, 15]]);
+  window.PROGRAMS = [
+    { id: 'ppl5', name: 'Push / Pull / Legs + Upper', when: '5 gym days + run', blurb: 'Every muscle twice a week, extra shoulder and back work for the V-taper. Best next step when a once-a-week split stops working.',
+      program: { days: {
+        1: D('Push', [['db_bench', 3, 6, 10], ['db_ohp', 3, 8, 12], ['incline_db', 3, 8, 12], ['lat_raise', 5, 12, 20], ['oh_ext', 3, 10, 15], ['pushdown', 2, 12, 15]]),
+        2: D('Pull', [['pullup', 3, 5, 10], ['cs_row', 3, 8, 12], ['lat_pd', 3, 8, 12], ['rear_fly', 3, 12, 20], ['incline_curl', 3, 10, 12], ['hammer', 2, 10, 12]]),
+        3: LEGS,
+        4: D('Upper (V-taper)', [['incline_db', 3, 8, 12], ['close_pd', 3, 8, 12], ['db_row', 3, 8, 12], ['angled_lat', 4, 12, 20], ['rear_fly', 2, 12, 20], ['ez_lying', 2, 8, 12]]),
+        5: D('Shoulders + arms', [['arnold', 3, 8, 12], ['seated_lat', 4, 12, 20], ['rear_fly', 3, 12, 20], ['preacher', 3, 10, 12], ['seated_oh_ext', 3, 10, 15], ['conc_curl', 2, 10, 12], ['cable_crunch', 3, 10, 15]]),
+        6: RUN, 0: REST } } },
+    { id: 'ul4', name: 'Upper / Lower', when: '4 gym days + run', blurb: 'Fewer gym days, heavier main lifts, every muscle twice a week. Good when time is short or recovery is struggling.',
+      program: { days: {
+        1: D('Upper A (strength)', [['db_bench', 3, 6, 8], ['cs_row', 3, 6, 10], ['db_ohp', 3, 8, 10], ['lat_pd', 3, 8, 12], ['lat_raise', 3, 12, 20], ['hammer', 2, 10, 12]]),
+        2: D('Lower A', [['smith_squat', 4, 6, 8], ['smith_rdl', 3, 8, 10], ['leg_curl', 3, 10, 15], ['calf', 4, 10, 15], ['hanging_knee', 3, 10, 15]]),
+        3: REST,
+        4: D('Upper B (V-taper)', [['incline_db', 3, 8, 12], ['pullup', 3, 5, 10], ['angled_lat', 4, 12, 20], ['db_row', 3, 8, 12], ['rear_fly', 3, 12, 20], ['oh_ext', 2, 10, 15], ['incline_curl', 2, 10, 12]]),
+        5: D('Lower B + abs', [['bulgarian', 3, 8, 12], ['leg_press', 3, 10, 15], ['leg_ext', 3, 10, 15], ['back_ext', 3, 10, 15], ['calf', 3, 12, 15], ['decline_crunch', 3, 10, 15]]),
+        6: RUN, 0: REST } } },
+    { id: 'arnold5', name: 'Arnold split', when: '5 gym days + run', blurb: 'Chest+back, shoulders+arms, legs — upper body twice a week. Long pump-style sessions for size.',
+      program: { days: {
+        1: D('Chest + back', [['db_bench', 3, 6, 10], ['pullup', 3, 5, 10], ['incline_db', 3, 8, 12], ['cs_row', 3, 8, 12], ['db_pullover', 2, 10, 15]]),
+        2: D('Shoulders + arms', [['arnold', 3, 8, 12], ['lat_raise', 4, 12, 20], ['rear_fly', 3, 12, 20], ['incline_curl', 3, 10, 12], ['ez_lying', 3, 8, 12], ['hammer', 2, 10, 12]]),
+        3: LEGS,
+        4: D('Chest + back B', [['incline_db', 3, 8, 12], ['lat_pd', 3, 8, 12], ['db_fly', 2, 10, 15], ['db_row', 3, 8, 12], ['back_ext', 2, 10, 15]]),
+        5: D('Shoulders + arms B', [['db_ohp', 3, 8, 12], ['angled_lat', 4, 12, 20], ['rear_fly', 2, 12, 20], ['preacher', 3, 10, 12], ['pushdown', 3, 12, 15], ['conc_curl', 2, 10, 12]]),
+        6: RUN, 0: REST } } },
+    { id: 'fb3', name: 'Full body ×3', when: '3 gym days + run', blurb: 'Whole body three times a week. Great for busy weeks or a lighter training phase.',
+      program: { days: {
+        1: D('Full body A', [['smith_squat', 3, 6, 10], ['db_bench', 3, 6, 10], ['cs_row', 3, 8, 12], ['lat_raise', 3, 12, 20], ['incline_curl', 2, 10, 12], ['hanging_knee', 2, 10, 15]]),
+        2: REST,
+        3: D('Full body B', [['smith_rdl', 3, 8, 10], ['incline_db', 3, 8, 12], ['pullup', 3, 5, 10], ['db_ohp', 2, 8, 12], ['oh_ext', 2, 10, 15], ['calf', 3, 10, 15]]),
+        4: REST,
+        5: D('Full body C', [['leg_press', 3, 10, 15], ['close_pd', 3, 8, 12], ['db_row', 3, 8, 12], ['angled_lat', 3, 12, 20], ['rear_fly', 2, 12, 20], ['cable_crunch', 3, 10, 15]]),
+        6: RUN, 0: REST } } },
+    { id: 'original', name: 'Your original split', when: '5 gym days + run', blurb: 'The split you started with (chest+tri, back+bi, shoulders+abs, upper, legs).', program: window.DEFAULT_PROGRAM }
+  ];
+})();

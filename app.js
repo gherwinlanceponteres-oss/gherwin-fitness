@@ -43,7 +43,7 @@ function defaults() {
     program: clone(window.DEFAULT_PROGRAM),
     foods: clone(window.DEFAULT_FOODS),
     templates: clone(window.DEFAULT_TEMPLATES),
-    sessions: {}, runs: [], days: {}, weights: {}, checkins: [], deloads: {}, moves: {},
+    sessions: {}, runs: [], days: {}, weights: {}, checkins: [], deloads: {}, moves: {}, skips: {}, savedPrograms: [],
     customEx: [], myQuotes: [], exNotes: {},
     stock: { nitrotech: { size: 40, start: t, adj: 0, tubG: 1810, scoopG: 45 }, creatine: { size: 60, start: t, adj: 0, tubG: 300, scoopG: 5 } },
     grocery: {},
@@ -417,7 +417,7 @@ const Sync = {
   saveMeta() { localStorage.setItem(META_KEY, JSON.stringify(this.meta)); },
   saveSess() { if (this.sess) localStorage.setItem(SESS_KEY, JSON.stringify(this.sess)); else localStorage.removeItem(SESS_KEY); },
   parts(st = S) {
-    const core = {}; for (const k of ['v', 'created', 'profile', 'overrides', 'program', 'foods', 'templates', 'stock', 'settings', 'deloads', 'lastBackup', 'customEx', 'myQuotes', 'grocery', 'exNotes', 'moves']) core[k] = st[k];
+    const core = {}; for (const k of ['v', 'created', 'profile', 'overrides', 'program', 'foods', 'templates', 'stock', 'settings', 'deloads', 'lastBackup', 'customEx', 'myQuotes', 'grocery', 'exNotes', 'moves', 'skips', 'savedPrograms']) core[k] = st[k];
     const out = { core, body: { weights: st.weights, checkins: st.checkins, runs: st.runs } };
     for (const [d, v] of Object.entries(st.sessions)) (out['sessions_' + d.slice(0, 7)] ||= {})[d] = v;
     for (const [d, v] of Object.entries(st.days)) (out['days_' + d.slice(0, 7)] ||= {})[d] = v;
@@ -628,6 +628,7 @@ function weekReport(mon) {
     if (rec.sleep) r.sleep.push(rec.sleep);
   }
   r.prs = prCountBetween(addD(mon, -1), sun);
+  r.skips = Object.entries(S.skips || {}).filter(([d]) => d >= mon && d <= sun).sort();
   const ws = weightSeries().filter(x => x.d >= mon && x.d <= sun); r.wChange = ws.length >= 2 ? r1(ws[ws.length - 1].y - ws[0].y) : null;
   const sl = r.sleep.length ? r1(avg(r.sleep)) : null, wa = r.water.length ? avg(r.water) : null, stp = r.steps.length ? Math.round(avg(r.steps)) : null;
   r.sleepAvg = sl; r.waterAvg = wa; r.stepsAvg = stp;
@@ -748,6 +749,8 @@ const VIEWS = {};
 VIEWS.today = () => {
   const t = today(), T = targets(), p = plannedFor(t), s = S.sessions[t], q = quoteOfDay(), notes = coachNotes();
   let h = `<div class="card hl"><div class="quote">“${esc(q.q)}”</div><div class="small muted" style="margin-top:6px">— ${esc(q.a)}</div>${notes.length ? `<hr><ul class="notes small">${notes.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
+  const md = missedDays();
+  if (md.length) { const d0 = md[0]; h += `<div class="card"><div class="row between"><div class="grow"><div class="label">Missed workout</div><div style="font-weight:700;margin-top:2px">${fmtD(d0)} · ${esc(plannedFor(d0).name)}</div><div class="small muted">What happened?${md.length > 1 ? ` (${md.length} missed days to note)` : ''}</div></div><button class="btn sm primary" data-a="missedWhy" data-d="${d0}">Add reason</button></div></div>`; }
   const lc = latestCheckin();
   if (!lc || diffD(lc.date, t) >= (S.settings.checkinDays || 28)) h += `<div class="card"><div class="row between"><div><h3>Check-in ${lc ? 'due' : ''}</h3><div class="small muted">${lc ? `Last one: ${fmtD(lc.date)}` : 'Record your starting weight, waist and neck.'}</div></div><button class="btn primary sm" data-a="go" data-t="me" data-s="checkin">Check in</button></div></div>`;
   let w = `<div class="card"><div class="label">${DNL[dow(t)]} · workout</div>`;
@@ -765,7 +768,7 @@ VIEWS.today = () => {
   const pg = proteinGap(t), gap = pg > 10 ? closeGap(pg) : null;
   h += `<div class="card tap" data-a="nutriHelp"><div class="row between"><div class="label">Nutrition · <span class="acc">tap for what to eat ›</span></div><button class="btn sm" data-a="logFood">+ Log food</button></div>${macroCard(t, T)}${gap ? `<div class="sug">Today's plan is ${pg} g protein short. Close the gap: ${esc(gap)}</div>` : ''}</div>`;
   h += sleepCard(t) + waterCard(t) + stepsCard(t) + suppCard(t);
-  if ([0, 1].includes(dow(t))) { const r = weekReport(dow(t) === 1 ? addD(monOf(t), -7) : monOf(t)); if (r.planned || r.pDays) h += `<div class="card hl"><div class="row between"><div><div class="label">${dow(t) === 0 ? 'This week' : 'Last week'} in review</div><div style="font-weight:800;font-size:17px;margin-top:4px">${r.done}/${r.planned} workouts · ${r.prs} PRs · protein ${r.pHit}/${r.pDays} days</div><div class="small muted" style="margin-top:4px">Focus: ${esc(r.focus)}</div></div></div><button class="btn sm" style="margin-top:10px" data-a="go" data-t="me" data-s="week">Full report</button></div>`; }
+  if ([0, 1].includes(dow(t))) { const r = weekReport(dow(t) === 1 ? addD(monOf(t), -7) : monOf(t)); if (r.planned || r.pDays) h += `<div class="card hl"><div class="row between"><div><div class="label">${dow(t) === 0 ? 'This week' : 'Last week'} in review</div><div style="font-weight:800;font-size:17px;margin-top:4px">${r.done}/${r.planned} workouts · ${r.prs} PRs · protein ${r.pHit}/${r.pDays} days</div>${r.skips.length ? `<div class="small muted">${r.skips.length} skipped/rest/deload day${r.skips.length > 1 ? 's' : ''}</div>` : ''}<div class="small muted" style="margin-top:4px">Focus: ${esc(r.focus)}</div></div></div><button class="btn sm" style="margin-top:10px" data-a="go" data-t="me" data-s="week">Full report</button></div>`; }
   h += `<div class="card"><label class="f" style="margin-top:0">Morning weight (optional)</label><div class="row"><input type="number" inputmode="decimal" step="0.1" data-c="weighin" data-d="${t}" value="${S.weights[t] ?? ''}" placeholder="kg"><button class="btn sm" data-a="saveNow">Save</button></div></div>`;
   return h;
 };
@@ -846,7 +849,8 @@ VIEWS.check = () => {
   const days = [1, 2, 3, 4, 5, 6, 0].map(dayCheck).filter(Boolean), all = days.flatMap(d => d.tracked), up = all.filter(r => r.status === 'up').length, pct = all.length ? up / all.length : 0;
   const head = all.length < 3 ? ['', 'Building data', 'Train 2–3 weeks and this shows whether your program still works.'] : pct >= 0.6 ? ['good', 'Program is working ✓', `${up} of ${all.length} lifts are still getting stronger.`] : pct >= 0.3 ? ['acc', 'Program is slowing down', `${up} of ${all.length} lifts improving. Tweak the stuck exercises below.`] : ['bad', "You've outgrown this program", `Only ${up} of ${all.length} lifts improving. Make the changes below.`];
   const pill = st => ({ up: '<span class="pill good">▲ improving</span>', flat: '<span class="pill acc">● flat</span>', stalled: '<span class="pill bad">■ stuck</span>', down: '<span class="pill bad">▼ dropping</span>', new: '<span class="pill">new</span>' })[st];
-  let h = `<div class="card ${head[0] === 'good' ? 'accent' : ''}"><div class="label">Program efficiency · week ${Math.max(1, weekIdx(today()) + 1)}</div><div class="big ${head[0]}" style="font-size:22px;margin-top:4px">${head[1]}</div><div class="small muted" style="margin-top:4px">${head[2]}</div>${all.length ? `<div class="bar lg" style="margin-top:12px"><i style="width:${Math.round(pct * 100)}%;background:var(--good)"></i></div><div class="tiny muted" style="margin-top:4px">${Math.round(pct * 100)}% of tracked lifts improving (last 8 weeks)</div>` : ''}</div>`;
+  const progCard = head[0] === 'bad' || head[0] === 'acc' ? programSuggestCard(head[0] === 'bad') : `<button class="btn block" style="margin-bottom:12px" data-a="programs">🔄 Browse other programs</button>`;
+  let h = `<div class="card ${head[0] === 'good' ? 'accent' : ''}"><div class="label">${esc(S.program.name || 'Your original split')} · week ${Math.max(1, weekIdx(today()) + 1)}</div><div class="big ${head[0]}" style="font-size:22px;margin-top:4px">${head[1]}</div><div class="small muted" style="margin-top:4px">${head[2]}</div>${all.length ? `<div class="bar lg" style="margin-top:12px"><i style="width:${Math.round(pct * 100)}%;background:var(--good)"></i></div><div class="tiny muted" style="margin-top:4px">${Math.round(pct * 100)}% of tracked lifts improving (last 8 weeks)</div>` : ''}</div>${progCard}`;
   for (const c of days) {
     const tips = checkTips(c);
     h += `<div class="card"><div class="row between"><div><div class="label">${DNL[c.k]}</div><h3 style="margin:2px 0">${esc(c.day.name)}</h3></div><span class="pill ${c.v.cls}">${esc(c.v.head)}</span></div><div class="small muted">${esc(c.v.line)}</div>
@@ -865,6 +869,17 @@ function deloadNudge(date) {
   if (real.length === 2 && real.every(weaker)) why.push('your last 2 workouts were weaker than usual');
   return why.length ? `Rough patch — ${why.join(', ')}. Consider a deload today.` : null;
 }
+const REASONS = [['tired', '😴 Tired / low energy'], ['sore', '🤕 Sore / injury'], ['sick', '🤒 Sick'], ['work', '💼 Work / busy'], ['sleep', '🛌 Bad sleep'], ['gym', '🏋️ Gym crowded / closed'], ['other', '✏️ Other']];
+const reasonLabel = k => (REASONS.find(r => r[0] === k) || [k, k])[1];
+const KIND = { rest: 'Rested', deload: 'Deload', missed: 'Missed' };
+function askReason(kind, date, cb) {
+  ctx.reasonCb = cb; ctx.reasonFor = { kind, date };
+  openModal(`<div class="row between"><h2 style="margin:0">${kind === 'missed' ? `Why did you miss ${fmtD(date)}?` : kind === 'rest' ? 'Why rest today?' : 'Why deload today?'}</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">Shows in your weekly report so you can spot patterns.</div>
+  <div class="col" style="gap:6px">${REASONS.map(([k, l]) => `<button class="btn block" style="text-align:left" data-a="reasonPick" data-r="${k}">${l}</button>`).join('')}</div>
+  <div id="reasonOther" class="hidden" style="margin-top:10px"><textarea id="reasonNote" rows="2" placeholder="What happened?"></textarea><button class="btn primary block" style="margin-top:8px" data-a="reasonSave">Save</button></div>
+  <button class="linkbtn" data-a="reasonSkip">Skip — no reason</button>`);
+}
+function missedDays() { const out = []; for (let i = 1; i <= 7; i++) { const d = addD(today(), -i); if (d < S.created) break; if (dayStatus(d) === 'miss' && !(S.skips || {})[d]) out.push(d); } return out; }
 const deloadsLast7 = date => Object.keys(S.sessions).filter(d => d <= date && diffD(d, date) < 7 && S.sessions[d].deload).length;
 function nextRestDay(date) { for (let i = 1; i <= 7; i++) { const d = addD(date, i); if (!S.sessions[d] && !(S.moves || {})[d] && dayPick[d] == null && planned(d).type === 'rest') return d; } return null; }
 function workoutButtons(date, p, s) {
@@ -877,7 +892,25 @@ function workoutButtons(date, p, s) {
   if (p.type === 'gym') b.push(`<button class="btn sm" data-a="deloadDay" data-d="${date}">💤 Deload today</button>`);
   else b.push(`<button class="btn sm" data-a="switchDay" data-d="${date}" data-deload="1">💤 Light session</button>`);
   if (p.type !== 'rest') b.push(`<button class="btn sm" data-a="restToday" data-d="${date}">😴 Rest today</button>`);
-  return `${p.moved && p.moved.from ? `<div class="tiny muted" style="margin-top:6px">↪ Moved here from ${fmtD(p.moved.from)}. <button class="linkbtn" style="padding:0" data-a="undoMove" data-d="${p.moved.from}">Undo</button></div>` : ''}${nudge ? `<div class="sug">${esc(nudge)}</div>` : ''}${many ? `<div class="tiny muted" style="margin-top:6px">That's ${deloadsLast7(date)} deload days this week — if you're often this tired, check sleep and calories.</div>` : ''}<div class="row wrap" style="gap:6px;margin-top:8px">${b.join('')}</div>`;
+  return `${p.moved && p.moved.from ? `<div class="tiny muted" style="margin-top:6px">↪ Moved here from ${fmtD(p.moved.from)}. <button class="linkbtn" style="padding:0" data-a="undoMove" data-d="${p.moved.from}">Undo</button></div>` : ''}${p.moved && p.moved.swap ? `<div class="tiny muted" style="margin-top:6px">↔ Swapped with ${fmtD(p.moved.swap)}. <button class="linkbtn" style="padding:0" data-a="undoMove" data-d="${date}">Undo</button></div>` : ''}${p.moved && p.moved.once ? `<div class="tiny muted" style="margin-top:6px">Changed for this day only. <button class="linkbtn" style="padding:0" data-a="undoMove" data-d="${date}">Undo</button></div>` : ''}${nudge ? `<div class="sug">${esc(nudge)}</div>` : ''}${many ? `<div class="tiny muted" style="margin-top:6px">That's ${deloadsLast7(date)} deload days this week — if you're often this tired, check sleep and calories.</div>` : ''}<div class="row wrap" style="gap:6px;margin-top:8px">${b.join('')}</div>`;
+}
+// ---------- ready-made programs ----------
+const curPid = () => S.program.tid || 'original';
+function progStats(p) {
+  const days = Object.values(p.days), gym = days.filter(d => d.type === 'gym'), m = {};
+  for (const d of gym) for (const it of d.items) { const mu = ex(it.ex).muscle; m[mu] = (m[mu] || 0) + it.sets; }
+  return { gym: gym.length, run: days.filter(d => d.type === 'run').length, min: gym.length ? Math.round(avg(gym.map(d => estMinutes(d.items)))) : 0, back: m.back || 0, delts: (m['side delts'] || 0) + (m['rear delts'] || 0), chest: m.chest || 0, legs: (m.quads || 0) + (m.hamstrings || 0) };
+}
+function rankedPrograms() { const order = ['ppl5', 'ul4', 'arnold5', 'fb3', 'original']; return order.map(id => window.PROGRAMS.find(p => p.id === id)).filter(p => p && p.id !== curPid()); }
+function programSuggestCard(outgrown) {
+  const top = rankedPrograms().slice(0, 2);
+  return `<div class="card hl"><div class="label">${outgrown ? "You've outgrown this program — try one of these" : 'Progress is slowing — a new program could restart it'}</div>${top.map((p, i) => { const st = progStats(p.program); return `<div class="daycard" style="margin-top:8px" data-a="programPreview" data-id="${p.id}"><div class="dl">${st.gym}×</div><div class="grow"><b>${esc(p.name)}</b>${i === 0 ? ' <span class="pill good">Recommended</span>' : ''}<div class="tiny muted">${esc(p.when)} · ~${st.min} min</div></div><span class="chev">›</span></div>`; }).join('')}<button class="linkbtn" data-a="programs">See all programs ›</button></div>`;
+}
+function useProgram(prog, tid, name) {
+  S.savedPrograms = (S.savedPrograms || []).filter(x => x.tid !== curPid()); S.savedPrograms.unshift({ name: S.program.name || 'Your original split', tid: curPid(), savedAt: today(), program: clone(S.program) }); S.savedPrograms = S.savedPrograms.slice(0, 5);
+  S.program = clone(prog); S.program.tid = tid; S.program.name = name; S.profile.programStart = monOf(today());
+  const t = today(); for (const d of Object.keys(S.moves || {})) if (d >= t) delete S.moves[d]; for (const d of Object.keys(S.sessions)) if (d >= t && !hasDone(S.sessions[d])) delete S.sessions[d]; for (const d of Object.keys(dayPick)) delete dayPick[d];
+  save(); closeModal(); route.tab = 'train'; route.sub.train = 'session'; ctx.date = t; render(); toast(`Now on ${name} — today: ${plannedFor(t).name}`);
 }
 const shortName = n => n.replace('Cardio — run', 'Run').replace(/\(.*?\)/g, '').split(/[+/]/).map(w => { w = w.trim().split(' ')[0]; return w.length > 7 ? w.slice(0, 5) + '.' : w; }).filter(Boolean).join(' ');
 VIEWS.month = () => {
@@ -906,7 +939,7 @@ VIEWS.runs = () => {
 };
 
 VIEWS.program = () => {
-  let h = `<div class="small muted" style="margin-bottom:10px">Your default week. To swap just one day (crowded gym), use the picker on the Workout screen instead.</div>`;
+  let h = `<div class="card"><div class="row between"><div><div class="label">Current program</div><b>${esc(S.program.name || 'Your original split')}</b></div><button class="btn sm" data-a="programs">🔄 Change program</button></div></div><div class="small muted" style="margin-bottom:10px">Your default week. To swap just one day, use "Switch workout" on the Workout screen.</div>`;
   for (const k of [1, 2, 3, 4, 5, 6, 0]) {
     const d = S.program.days[k];
     h += `<div class="card"><div class="row"><b style="width:38px">${DN[k]}</b><input type="text" data-c="dayName" data-k="${k}" value="${esc(d.name)}"><select data-c="dayType" data-k="${k}" style="width:92px"><option value="gym" ${d.type === 'gym' ? 'selected' : ''}>Gym</option><option value="run" ${d.type === 'run' ? 'selected' : ''}>Run</option><option value="rest" ${d.type === 'rest' ? 'selected' : ''}>Rest</option></select></div>`;
@@ -974,12 +1007,12 @@ VIEWS.plan = () => {
   tpl.forEach((s, si) => {
     h += `<div class="card"><div class="row"><input type="text" data-c="slotName" data-si="${si}" value="${esc(s.slot)}"><button class="iconbtn" data-a="slotDel" data-si="${si}" aria-label="Delete meal">✕</button></div>`;
     s.items.forEach((it, ii) => {
-      h += `<div class="row" style="margin-top:8px"><select data-c="tItemFood" data-si="${si}" data-ii="${ii}">${opts(it.food)}</select><input type="number" step="0.5" data-c="tItemQty" data-si="${si}" data-ii="${ii}" value="${it.qty}" style="width:70px"><button class="iconbtn" data-a="tItemDel" data-si="${si}" data-ii="${ii}">✕</button></div>`;
+      h += `<div class="row" style="margin-top:8px"><select data-c="tItemFood" data-si="${si}" data-ii="${ii}">${opts(it.food)}</select><button class="iconbtn" data-a="tItemFind" data-si="${si}" data-ii="${ii}" aria-label="Search a different food">🔎</button><input type="number" step="0.5" data-c="tItemQty" data-si="${si}" data-ii="${ii}" value="${it.qty}" style="width:70px"><button class="iconbtn" data-a="tItemDel" data-si="${si}" data-ii="${ii}">✕</button></div>`;
       if (food(it.food).protein) h += `<label class="small muted cb"><input type="checkbox" data-c="tItemAlt" data-si="${si}" data-ii="${ii}" ${it.alts ? 'checked' : ''}> Allow swapping with other meats/fish</label>`;
     });
-    h += `<button class="btn sm ghost" style="margin-top:8px" data-a="tItemAdd" data-si="${si}">+ Food</button></div>`;
+    h += `<button class="btn sm ghost" style="margin-top:8px" data-a="tItemAdd" data-si="${si}">🔎 + Add food (search)</button></div>`;
   });
-  return h + `<button class="btn sm" data-a="slotAdd">+ Add meal</button><br><br>${saveBtn('Save meal plan')}`;
+  return h + `<button class="btn sm" data-a="slotAdd">+ Add meal</button><br><br>${saveBtn('Save meal plan')}<button class="btn ghost block" style="margin-top:8px" data-a="sub" data-s="foods">🗑 Manage the food list (delete foods)</button>`;
 };
 
 // ---------- meal calculator ----------
@@ -1030,14 +1063,15 @@ function calcResults(q) {
   box.innerHTML = list.map((it, i) => fRow(it, i).replace('data-a="flPick"', 'data-a="calcPicked"')).join('') || '<div class="small muted">No match — enter it yourself below.</div>';
 }
 
-VIEWS.foods = () => `<div class="row between" style="margin-bottom:8px"><div class="small muted">Values per 1 unit. Tap to edit. Foods you save from the + button land here.</div><button class="btn sm primary" data-a="foodEdit" data-id="">+ New</button></div><div class="card">${Object.entries(S.foods).map(([id, f]) => `<div class="list-item" data-a="foodEdit" data-id="${id}"><div class="grow"><b>${esc(f.name)}</b><div class="tiny faint">${esc(f.unit)} · ${r1(f.kcal)} kcal · P ${r1(f.p)} · C ${r1(f.c)} · F ${r1(f.f)}</div></div><span class="pill">${esc(f.cat || '')}</span></div>`).join('')}</div>`;
+VIEWS.foods = () => `<div class="row between" style="margin-bottom:8px"><div class="small muted">Values per 1 unit. Tap to edit. Foods you save from the + button land here.</div><button class="btn sm primary" data-a="foodEdit" data-id="">+ New</button></div><div class="card">${Object.entries(S.foods).map(([id, f]) => `<div class="list-item" data-a="foodEdit" data-id="${id}"><div class="grow"><b>${esc(f.name)}</b><div class="tiny faint">${esc(f.unit)} · ${r1(f.kcal)} kcal · P ${r1(f.p)} · C ${r1(f.c)} · F ${r1(f.f)}</div></div><span class="pill">${esc(f.cat || '')}</span>${f.stock ? '' : `<button class="iconbtn" data-a="foodDel" data-id="${id}" aria-label="Delete ${esc(f.name)}">🗑</button>`}</div>`).join('')}</div>`;
 
 VIEWS.analysis = () => {
   const g = growth(); void g;
   const ws = weightSeries(), T = targets();
   let h = growthCard(true);
   const ids = usedExIds().filter(id => exHistory(id).length >= 2);
-  if (ids.length) h += `<div class="card"><h3>Lift by lift</h3><table class="tbl"><tr><th>Exercise</th><th class="r">First</th><th class="r">Now</th><th class="r">Change</th></tr>${ids.map(id => { const h0 = exHistory(id), f = h0[0].best, l = h0[h0.length - 1].best, pc = r1((l - f) / f * 100); return `<tr><td>${esc(ex(id).name)}</td><td class="r">${r1(f)}</td><td class="r">${r1(l)}</td><td class="r ${pc > 0 ? 'good' : pc < 0 ? 'bad' : ''}">${pc > 0 ? '+' : ''}${pc}%</td></tr>`; }).join('')}</table><div class="tiny faint" style="margin-top:6px">Numbers are estimated 1-rep max (kg) from your best set.</div></div>`;
+  const bestSet = x => x.sets.reduce((a, z) => (e1rm(z.w, z.r) > e1rm(a.w, a.r) ? z : a)), setTxt = z => `${z.w ? r1(z.w) + ' kg' : 'BW'} × ${z.r}`;
+  if (ids.length) h += `<div class="card"><h3>Lift by lift</h3><div class="small muted" style="margin-bottom:6px">Your best set the first time you did each exercise → your best set last time.</div>${ids.map(id => { const h0 = exHistory(id), f = h0[0], l = h0[h0.length - 1], pc = r1((l.best - f.best) / f.best * 100); return `<div class="check"><div class="grow"><b>${esc(ex(id).name)}</b><div class="small muted">${setTxt(bestSet(f))} <span class="faint">(${fmtD(f.date).slice(4)})</span> → <b>${setTxt(bestSet(l))}</b> <span class="faint">(${fmtD(l.date).slice(4)})</span></div></div><span class="pill ${pc > 0 ? 'good' : pc < 0 ? 'bad' : ''}">${pc > 0 ? '+' : ''}${pc}% ${pc > 0 ? 'stronger' : pc < 0 ? 'weaker' : 'same'}</span></div>`; }).join('')}<div class="tiny faint" style="margin-top:6px">The % combines weight and reps, so 24 kg × 12 counts as stronger than 24 kg × 10.</div></div>`;
   h += `<div class="card"><h3>Weight trend</h3>${lineChart(ws, { empty: 'Log a morning weight on the Today tab to see your trend.' })}<div class="small muted" style="margin-top:6px">Target ${T.kcal} kcal · ${T.protein} g protein · goal: ${esc(GOALS[S.profile.goal])}</div></div>`;
   return h;
 };
@@ -1049,6 +1083,7 @@ VIEWS.week = () => {
   <div class="card hl"><div class="label">Focus for next week</div><div style="font-weight:800;font-size:17px;margin-top:4px">${esc(r.focus[0].toUpperCase() + r.focus.slice(1))}</div></div>
   <div class="card"><h3>Training</h3><div class="kpis">${tile(`${r.done}/${r.planned}`, 'workouts done')}${tile(r.sets, 'working sets')}${tile(Math.round(r.vol).toLocaleString() + ' kg', 'volume')}${tile(r.prs, 'new PRs')}${tile(S.runs.filter(x => x.date >= r.mon && x.date <= r.sun).reduce((a, x) => a + x.km, 0) + ' km', 'ran')}</div></div>
   <div class="card"><h3>Nutrition</h3><div class="kpis">${tile(r.pDays ? Math.round(r.kcal / r.pDays) : '–', `avg kcal (target ${T.kcal})`)}${tile(r.pDays ? Math.round(r.p / r.pDays) + ' g' : '–', `avg protein (target ${T.protein})`)}${tile(`${r.pHit}/${r.pDays}`, 'days protein on target')}</div></div>
+  <div class="card"><h3>Skipped, rested & deload days</h3>${r.skips.length ? (() => { const c = {}; r.skips.forEach(([, x]) => { if (x.reason !== 'none') c[x.reason] = (c[x.reason] || 0) + 1; }); return `<div class="small" style="margin-bottom:6px">${Object.entries(c).map(([k, n]) => `${reasonLabel(k)} ×${n}`).join(' · ') || 'No reasons given'}</div>` + r.skips.map(([d, x]) => `<div class="check"><div class="grow small"><b>${fmtD(d)}</b> · ${KIND[x.kind] || x.kind}</div><span class="small muted">${x.reason === 'none' ? '—' : esc(reasonLabel(x.reason))}${x.note ? ` · ${esc(x.note)}` : ''}</span></div>`).join(''); })() : '<div class="small muted">None this week 💪</div>'}</div>
   <div class="card"><h3>Recovery & habits</h3><div class="kpis">${tile(r.sleepAvg ? r.sleepAvg + ' h' : '–', 'avg sleep')}${tile(r.waterAvg ? fmtL(r.waterAvg) : '–', `avg water · goal hit ${r.waterHit}×`)}${tile(r.stepsAvg ? r.stepsAvg.toLocaleString() : '–', `avg steps · goal hit ${r.stepHit}×`)}${tile(r.wChange != null ? (r.wChange > 0 ? '+' : '') + r.wChange + ' kg' : '–', 'weight change')}</div></div>`;
 };
 VIEWS.lifts = () => {
@@ -1454,13 +1489,14 @@ A.nutriPlan = el => { const d = today(), rec = dayRec(d, true), it = dayItems(d)
 A.checkSwap = el => { const it = S.program.days[el.dataset.k].items[+el.dataset.i], from = ex(it.ex).name; it.ex = el.dataset.to; save(); render(true); toast(`${from} → ${ex(it.ex).name} in your split`); };
 A.checkReps = el => { const it = S.program.days[el.dataset.k].items[+el.dataset.i]; if (it.min <= 8) { it.min = 10; it.max = 15; } else { it.min = 6; it.max = 8; } save(); render(true); toast(`${ex(it.ex).name}: now ${it.min}–${it.max} reps`); };
 const hasDone = s => s && s.entries.some(e => e.sets.some(z => z.done));
-A.deloadDay = el => {
-  const d = el.dataset.d, s = S.sessions[d];
+A.deloadDay = el => { const d = el.dataset.d; askReason('deload', d, () => doDeloadDay(d)); };
+function doDeloadDay(d) {
+  const s = S.sessions[d];
   if (hasDone(s)) { applyDeload(s); save(); render(true); return toast('Rest of this workout switched to deload'); }
   const k = s ? s.dow : effKey(d); delete S.sessions[d]; createSession(d, k, { deload: true }); render(true);
   toast('💤 Deload day — half the sets at ~60% weight');
-};
-A.undoDeload = el => { const d = el.dataset.d, s = S.sessions[d]; if (hasDone(s)) return; const k = s.dow; delete S.sessions[d]; if (k !== dow(d) && (S.moves || {})[d] == null) dayPick[d] = k; save(); render(true); toast('Back to your normal workout'); };
+}
+A.undoDeload = el => { const d = el.dataset.d, s = S.sessions[d]; if (hasDone(s)) return; if (S.skips[d] && S.skips[d].kind === 'deload') delete S.skips[d]; const k = s.dow; delete S.sessions[d]; if (k !== dow(d) && (S.moves || {})[d] == null) dayPick[d] = k; save(); render(true); toast('Back to your normal workout'); };
 function applyDeload(s) {
   s.deload = true;
   s.entries = s.entries.map(e => {
@@ -1471,9 +1507,9 @@ function applyDeload(s) {
     return e;
   });
 }
-A.restToday = el => {
-  const d = el.dataset.d, s = S.sessions[d];
-  if (hasDone(s)) return toast('You already logged sets today — use ✕ › Finish now instead.');
+A.restToday = el => { const d = el.dataset.d; if (hasDone(S.sessions[d])) return toast('You already logged sets today — use ✕ › Finish now instead.'); askReason('rest', d, () => doRestToday(d)); };
+function doRestToday(d) {
+  const s = S.sessions[d];
   const k = s ? s.dow : effKey(d), name = S.program.days[k].name, to = nextRestDay(d);
   if (!to) {
     ctx.moveFrom = { d, k };
@@ -1481,7 +1517,7 @@ A.restToday = el => {
       [1, 2, 3, 4, 5, 6, 7].map(i => addD(d, i)).filter(x => !S.sessions[x] && !(S.moves || {})[x]).map(x => `<div class="daycard" data-a="moveTo" data-to="${x}"><div class="dl">${DN[dow(x)]}</div><div class="grow"><b>${fmtD(x)}</b><div class="tiny muted">now: ${esc(plannedFor(x).name)}</div></div></div>`).join(''));
   }
   doMove(d, k, to);
-};
+}
 function doMove(d, k, to) {
   S.moves = S.moves || {}; delete S.sessions[d]; delete dayPick[d];
   S.moves[d] = { rest: true, to, k0: k }; S.moves[to] = { k, from: d };
@@ -1489,18 +1525,39 @@ function doMove(d, k, to) {
 }
 A.moveTo = el => doMove(ctx.moveFrom.d, ctx.moveFrom.k, el.dataset.to);
 A.undoMove = el => {
-  const d = el.dataset.d, m = (S.moves || {})[d]; if (!m) return; const to = m.to;
-  if (to && hasDone(S.sessions[to])) return toast(`You already trained it on ${fmtD(to)}.`);
-  if (to) { delete S.sessions[to]; delete S.moves[to]; } delete S.moves[d]; save(); render(true); toast('Undone — back to your normal plan');
+  const d = el.dataset.d, m = (S.moves || {})[d]; if (!m) return; const p2 = m.to || m.from || m.swap;
+  if (p2 && hasDone(S.sessions[p2])) return toast(`You already trained on ${fmtD(p2)} — can't undo.`);
+  if (hasDone(S.sessions[d])) return toast(`You already trained on ${fmtD(d)} — can't undo.`);
+  delete S.sessions[d]; clearPair(d); for (const x of [d, p2]) if (x && S.skips[x] && S.skips[x].kind === 'rest') delete S.skips[x];
+  save(); render(true); toast('Undone — back to your normal plan');
 };
-A.pDeload = () => { const s = S.sessions[P.date]; applyDeload(s); save(); closeModal(); const e = s.entries[P.ei], j = e.sets.findIndex(z => !z.done); if (j >= 0) { P.si = j; if (P.phase !== 'rest') P.phase = 'work'; } else { const ni = s.entries.findIndex(q => q.sets.some(z => !z.done)); if (ni >= 0) { P.ei = ni; P.si = s.entries[ni].sets.findIndex(z => !z.done); P.phase = 'work'; } else P.phase = 'choice'; } renderPlayer(); toast('💤 Switched to deload — fewer, lighter sets'); };
+A.pDeload = () => askReason('deload', P.date, doPDeload);
+const doPDeload = () => { const s = S.sessions[P.date]; applyDeload(s); save(); closeModal(); const e = s.entries[P.ei], j = e.sets.findIndex(z => !z.done); if (j >= 0) { P.si = j; if (P.phase !== 'rest') P.phase = 'work'; } else { const ni = s.entries.findIndex(q => q.sets.some(z => !z.done)); if (ni >= 0) { P.ei = ni; P.si = s.entries[ni].sets.findIndex(z => !z.done); P.phase = 'work'; } else P.phase = 'choice'; } renderPlayer(); toast('💤 Switched to deload — fewer, lighter sets'); };
+function setReason(r, note) { const { kind, date } = ctx.reasonFor; S.skips = S.skips || {}; if (r) S.skips[date] = { kind, reason: r, note: note || '', at: today() }; else S.skips[date] = { kind, reason: 'none', at: today() }; save(); const cb = ctx.reasonCb; ctx.reasonCb = null; closeModal(); if (cb) cb(); else render(true); }
+A.reasonPick = el => { if (el.dataset.r === 'other') { $('#reasonOther').classList.remove('hidden'); $('#reasonNote').focus(); return; } setReason(el.dataset.r); };
+A.reasonSave = () => setReason('other', $('#reasonNote').value.trim());
+A.reasonSkip = () => setReason(null);
+A.missedWhy = el => askReason('missed', el.dataset.d, null);
 A.toggleLog = () => { ctx.showLog = !ctx.showLog; render(true); };
 A.switchDay = el => {
   const d = el.dataset.d, light = el.dataset.deload === '1', cur = light ? -1 : (S.sessions[d] ? S.sessions[d].dow : effKey(d));
-  openModal(`<div class="row between"><h2 style="margin:0">${light ? '💤 Light session' : 'Switch workout'}</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">${light ? `Pick a workout to do as a deload — half the sets at ~60% weight. Doesn't affect your strength progress.` : `For ${fmtD(d)} only — your weekly split stays the same.`}</div>` +
-    [1, 2, 3, 4, 5, 6, 0].filter(k => S.program.days[k].type === 'gym').map(k => { const day = S.program.days[k]; return `<div class="daycard ${+cur === k ? 'on' : ''}" data-a="pickDayCard" data-d="${d}" data-k="${k}" ${light ? 'data-deload="1"' : ''}><div class="dl">${DN[k]}</div><div class="grow"><b>${esc(day.name)}</b><div class="tiny muted">${day.items.length} exercises · ~${estMinutes(day.items)} min · ${esc(musclesOf(day.items).join(', '))}</div></div>${+cur === k ? '<span class="pill acc">Current</span>' : ''}</div>`; }).join(''));
+  const keys = [1, 2, 3, 4, 5, 6, 0].filter(k => S.program.days[k].type === 'gym' || (!light && S.program.days[k].type === 'run'));
+  openModal(`<div class="row between"><h2 style="margin:0">${light ? '💤 Light session' : 'Switch workout'}</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">${light ? `Pick a workout to do as a deload — half the sets at ~60% weight. Doesn't affect your strength progress.` : `Pick what to do on ${fmtD(d)}. The two days <b>swap</b> — the workout you skip moves to the day you took it from, so nothing is missed.`}</div>` +
+    keys.map(k => { const day = S.program.days[k], sw = light ? null : swapTarget(d, k); return `<div class="daycard ${+cur === k ? 'on' : ''}" data-a="pickDayCard" data-d="${d}" data-k="${k}" ${light ? 'data-deload="1"' : ''}><div class="dl">${day.type === 'run' ? '🏃' : DN[k]}</div><div class="grow"><b>${esc(day.name)}</b><div class="tiny muted">${day.type === 'run' ? `Easy run · target ${nextLongRun()} km` : `${day.items.length} exercises · ~${estMinutes(day.items)} min · ${esc(musclesOf(day.items).join(', '))}`}${sw ? `<br>↔ swaps with ${fmtD(sw)}` : !light && +cur !== k ? '<br>this day only (already done or passed this week)' : ''}</div></div>${+cur === k ? '<span class="pill acc">Current</span>' : ''}</div>`; }).join(''));
 };
-A.pickDayCard = el => { const d = el.dataset.d, k = +el.dataset.k; if (S.sessions[d] && S.sessions[d].entries.some(e => e.sets.some(z => z.done))) { closeModal(); return toast('This workout already has sets logged — discard it first in "Edit workout log".'); } delete S.sessions[d]; dayPick[d] = k; if (el.dataset.deload === '1') createSession(d, k, { deload: true }); save(); closeModal(); render(true); toast(`${fmtD(d)}: ${S.program.days[k].name}${el.dataset.deload === '1' ? ' (deload)' : ''}`); };
+function swapTarget(d, k) { const sun = addD(monOf(d), 6); for (let i = 1; i <= 6; i++) { const x = addD(d, i); if (x > sun) break; if (!S.sessions[x] && !(S.moves || {})[x] && effKey(x) === k) return x; } return null; }
+function clearPair(d) { const m = (S.moves || {})[d]; if (!m) return; const p2 = m.to || m.from || m.swap; if (p2 && S.moves[p2]) { if (!hasDone(S.sessions[p2])) delete S.sessions[p2]; delete S.moves[p2]; } delete S.moves[d]; }
+A.pickDayCard = el => {
+  const d = el.dataset.d, k = +el.dataset.k;
+  if (hasDone(S.sessions[d])) { closeModal(); return toast('This workout already has sets logged — discard it first in "Edit workout log".'); }
+  if (el.dataset.deload === '1') { delete S.sessions[d]; dayPick[d] = k; createSession(d, k, { deload: true }); save(); closeModal(); render(true); return toast(`${fmtD(d)}: ${S.program.days[k].name} (deload)`); }
+  clearPair(d); delete S.sessions[d]; delete dayPick[d]; S.moves = S.moves || {};
+  const orig = effKey(d); if (orig === k) { save(); closeModal(); render(true); return toast('Back to the normal plan'); }
+  const to = swapTarget(d, k), nm = S.program.days[k].name, on = S.program.days[orig] ? S.program.days[orig].name : 'Rest';
+  if (to) { S.moves[d] = { k, swap: to }; S.moves[to] = { k: orig, swap: d }; toast(`↔ ${nm} today · ${on} moved to ${fmtD(to)}`); }
+  else { S.moves[d] = { k, once: true }; toast(`${fmtD(d)}: ${nm} (no later ${nm} this week to swap with)`); }
+  save(); closeModal(); render(true);
+};
 A.pMenu = () => {
   const s = S.sessions[P.date], done = s.entries.reduce((a, e) => a + e.sets.filter(z => z.done).length, 0);
   openModal(`<div class="row between"><h2 style="margin:0">Stop workout?</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 12px">${done} set${done === 1 ? '' : 's'} logged so far.</div>
@@ -1805,7 +1862,40 @@ A.tpl = el => { ctx.tpl = el.dataset.v; render(); };
 A.slotDel = el => { if (confirm('Delete this meal from the plan?')) { S.templates[ctx.tpl].splice(+el.dataset.si, 1); save(); render(true); } };
 A.slotAdd = () => { S.templates[ctx.tpl].push({ slot: 'New meal', items: [] }); save(); render(true); };
 A.tItemDel = el => { S.templates[ctx.tpl][+el.dataset.si].items.splice(+el.dataset.ii, 1); save(); render(true); };
-A.tItemAdd = el => { S.templates[ctx.tpl][+el.dataset.si].items.push({ food: 'egg', qty: 1 }); save(); render(true); };
+A.tItemAdd = el => { const si = +el.dataset.si; pickFood(`Add to ${S.templates[ctx.tpl][si].slot}`, id => { const it = { food: id, qty: 1 }; if (food(id).protein) it.alts = Object.keys(S.foods).filter(k => S.foods[k].protein); S.templates[ctx.tpl][si].items.push(it); save(); render(true); toast(`Added ${food(id).name}`); }); };
+A.tItemFind = el => { const si = +el.dataset.si, ii = +el.dataset.ii; pickFood('Replace with…', id => { const it = S.templates[ctx.tpl][si].items[ii]; it.food = id; if (!food(id).protein) delete it.alts; save(); render(true); toast(`Changed to ${food(id).name}`); }); };
+// shared food search (meal plan): built-in + my foods + online; picked food is saved to My foods
+function pickFood(title, cb) {
+  PF = { cb, q: '', online: [] };
+  openModal(`<div class="row between"><h2 style="margin:0">${esc(title)}</h2><button class="iconbtn" data-a="close">✕</button></div><div class="searchbar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="pfQ" data-in="pfQ" placeholder="Search tilapia, adobo, oats, milk…" autocomplete="off"></div><div id="pfRes"></div>`);
+  pfResults();
+}
+let PF = null;
+function pfResults() {
+  const box = $('#pfRes'); if (!box || !PF) return; const q = PF.q.trim(), { mine, db, fuzzy } = foodSearch(q); let list = [], h = '';
+  const add = (t, arr) => { if (!arr.length) return; h += `<div class="sect">${t}</div>`; arr.forEach(it => { h += fRow(it, list.length).replace('data-a="flPick"', 'data-a="pfPick"'); list.push(it); }); };
+  if (fuzzy && (mine.length || db.length)) h += `<div class="small muted" style="margin:8px 0">No exact match — closest foods:</div>`;
+  add('My foods', mine.slice(0, q ? 15 : 60)); if (q) add('Food list', db.slice(0, 40)); add('Online', PF.online);
+  if (q) h += `<button class="btn block" style="margin-top:6px" data-a="pfOnline" ${PF.loading ? 'disabled' : ''}>${PF.loading ? 'Searching online…' : `🔎 Search online for “${esc(q)}”`}</button>${PF.msg ? `<div class="small muted" style="margin-top:6px">${esc(PF.msg)}</div>` : ''}`;
+  PF.list = list; box.innerHTML = h;
+}
+function toFoodId(it) {
+  if (it.src === 'my') return it.id;
+  const ex0 = Object.entries(S.foods).find(([, f]) => f.name.toLowerCase() === it.name.toLowerCase()); if (ex0) return ex0[0];
+  let id = it.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 24) || 'food'; while (S.foods[id]) id += '_';
+  const prot = it.cat === 'Meat & fish' || (it.p >= 15 && it.p * 4 / Math.max(it.kcal, 1) > 0.3);
+  S.foods[id] = { name: it.name, unit: it.g ? `${it.label} (${it.g} g)` : it.label, kcal: r1(it.kcal), p: r1(it.p), c: r1(it.c), f: r1(it.f), cat: it.cat === 'Other' ? 'Other' : it.cat || 'Other', buy: it.g ? { g: it.g } : { pcs: 1, label: 'pcs' }, gPer: it.g || undefined, protein: prot };
+  return id;
+}
+A.pfPick = el => { const it = PF.list[+el.dataset.i], id = toFoodId(it), cb = PF.cb; save(); closeModal(); cb && cb(id); };
+A.pfOnline = async () => {
+  const q = PF.q.trim(); if (!q) return; if (!navigator.onLine) { PF.msg = 'No internet right now.'; return pfResults(); }
+  PF.loading = true; PF.msg = ''; pfResults();
+  const en = queryTerms(q).map(a => a.find(w => /^[a-z ]+$/.test(w) && !['bangus', 'liempo', 'manok', 'baboy', 'isda', 'prito', 'inihaw'].includes(w)) || a[0]).join(' ');
+  const [u, o] = await Promise.allSettled([usdaSearch(en || q), offSearch(q)]);
+  PF.online = [...(u.status === 'fulfilled' ? u.value : []), ...(o.status === 'fulfilled' ? o.value : [])];
+  PF.msg = PF.online.length ? '' : 'Nothing found online. Add it yourself in Eat › My foods › + New.'; PF.loading = false; pfResults();
+};
 A.foodEdit = el => {
   const id = el.dataset.id, f = id ? S.foods[id] : { name: '', unit: '', kcal: 0, p: 0, c: 0, f: 0, cat: 'Other', buy: { pcs: 1, label: 'pcs' } };
   const bt = f.buy ? (f.buy.g ? 'g' : f.buy.ml ? 'ml' : 'pcs') : 'none', bv = f.buy ? (f.buy.g || f.buy.ml || f.buy.pcs || 1) : '';
@@ -1827,8 +1917,10 @@ A.foodSave = el => {
   save(); closeModal(); toast('Saved ✓'); render(true);
 };
 A.foodDel = el => {
-  const id = el.dataset.id; if (Object.values(S.templates).some(t => t.some(s => s.items.some(i => i.food === id)))) return toast('It is in your meal plan — remove it there first.');
-  if (confirm('Delete this food?')) { delete S.foods[id]; for (const t of Object.values(S.templates)) for (const s of t) for (const it of s.items) if (it.alts) it.alts = it.alts.filter(a => a !== id); save(); closeModal(); render(true); }
+  const id = el.dataset.id, used = Object.values(S.templates).some(t => t.some(s => s.items.some(i => i.food === id)));
+  if (S.foods[id] && S.foods[id].stock) return toast('Supplements with a tub tracker can’t be deleted.');
+  if (confirm(used ? `Delete "${food(id).name}"? It's in your meal plan — it will be removed from the plan too.` : `Delete "${food(id).name}" from your food list?`)) {
+    for (const t of Object.values(S.templates)) for (const sl of t) sl.items = sl.items.filter(i => i.food !== id); delete S.foods[id]; for (const t of Object.values(S.templates)) for (const s of t) for (const it of s.items) if (it.alts) it.alts = it.alts.filter(a => a !== id); save(); closeModal(); render(true); }
 };
 A.saveCheckin = async () => {
   const date = $('#ciDate').value || today(), w = num($('#ciW').value), waist = num($('#ciWaist').value), neck = num($('#ciNeck').value);
@@ -1904,7 +1996,25 @@ C.stock = el => { const st = S.stock[el.dataset.k]; st[el.dataset.f] = el.datase
 C.flMeal = el => { FL.meal = el.value; };
 I.flQ = el => { FL.q = el.value; FL.off = []; FL.usda = []; FL.onlineMsg = ''; if ($('#flSel').innerHTML) { FL.sel = null; $('#flSel').innerHTML = ''; $('#flBrowse').classList.remove('hidden'); } clearTimeout(I._t); I._t = setTimeout(flResults, 120); };
 I.flAmt = el => { FL.amt = el.value; const t = $('#flTiles'); if (t) t.innerHTML = flTiles(); };
+I.pfQ = el => { if (!PF) return; PF.q = el.value; PF.online = []; PF.msg = ''; clearTimeout(I._pf); I._pf = setTimeout(pfResults, 120); };
 I.xQ = el => { pickExercise.q = el.value; clearTimeout(I._x); I._x = setTimeout(pickResults, 120); };
+
+// program actions
+A.programs = () => {
+  const list = window.PROGRAMS, cur = curPid(), rec = rankedPrograms()[0];
+  openModal(`<div class="row between"><h2 style="margin:0">Programs</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small muted" style="margin:4px 0 10px">All fit your gym (dumbbells, Smith machine, lat pulldown, leg machines) and your V-taper goal. Your history and progress carry over.</div>` +
+    list.map(p => { const st = progStats(p.program); return `<div class="daycard ${p.id === cur ? 'on' : ''}" data-a="programPreview" data-id="${p.id}"><div class="dl">${st.gym}×</div><div class="grow"><b>${esc(p.name)}</b>${p.id === cur ? ' <span class="pill acc">Current</span>' : rec && p.id === rec.id ? ' <span class="pill good">Recommended</span>' : ''}<div class="tiny muted">${esc(p.when)} · ~${st.min} min · back ${st.back} · shoulders ${st.delts} sets/wk</div></div><span class="chev">›</span></div>`; }).join('') +
+    ((S.savedPrograms || []).length ? `<div class="sect">Your previous programs</div>` + S.savedPrograms.map((sp, i) => `<div class="daycard" data-a="programRestore" data-i="${i}"><div class="dl">↶</div><div class="grow"><b>${esc(sp.name)}</b><div class="tiny muted">used until ${fmtD(sp.savedAt)}</div></div><span class="btn sm">Restore</span></div>`).join('') : ''));
+};
+A.programPreview = el => {
+  const p = window.PROGRAMS.find(x => x.id === el.dataset.id), st = progStats(p.program), cur = progStats(S.program);
+  openModal(`<div class="row between"><h2 style="margin:0">${esc(p.name)}</h2><button class="iconbtn" data-a="programs" aria-label="Back">‹</button></div><div class="small muted" style="margin:4px 0 10px">${esc(p.blurb)}</div>
+  <div class="kpis"><div class="kpi"><b>${st.gym}</b><span>gym days (now ${cur.gym})</span></div><div class="kpi"><b>~${st.min}</b><span>min per session</span></div><div class="kpi"><b>${st.back}</b><span>back sets/wk (now ${cur.back})</span></div><div class="kpi"><b>${st.delts}</b><span>shoulder sets/wk (now ${cur.delts})</span></div></div>` +
+    [1, 2, 3, 4, 5, 6, 0].map(k => { const d = p.program.days[k]; return `<div class="check"><b style="width:40px">${DN[k]}</b><div class="grow"><b>${esc(d.name)}</b>${d.items.length ? `<div class="tiny muted">${d.items.map(i => `${esc(ex(i.ex).name)} ${i.sets}×${i.min}–${i.max}`).join(' · ')}</div>` : ''}</div></div>`; }).join('') +
+    (p.id === curPid() ? '<div class="sug">This is your current program.</div>' : `<button class="btn primary block big-btn" style="margin-top:12px" data-a="programUse" data-id="${p.id}">Switch to this program</button><div class="tiny faint" style="margin-top:6px">Starts this week. Today's workout updates if you haven't started it. You can switch back any time.</div>`));
+};
+A.programUse = el => { const p = window.PROGRAMS.find(x => x.id === el.dataset.id); if (!confirm(`Switch to ${p.name}? Your current split is saved so you can switch back.`)) return; useProgram(p.program, p.id, p.name); };
+A.programRestore = el => { const sp = S.savedPrograms[+el.dataset.i]; if (!confirm(`Switch back to ${sp.name}?`)) return; useProgram(sp.program, sp.tid, sp.name); };
 
 // meal calculator actions
 I.cQ = el => { clearTimeout(I._c); I._c = setTimeout(() => calcResults(el.value), 120); };
