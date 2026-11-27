@@ -271,3 +271,29 @@ div.p-demo{display:grid;place-items:center;background:var(--card2);font-size:48p
 .card.tap{cursor:pointer}
 .card.tap:active{transform:scale(.995)}
 .pill{white-space:nowrap}
+/* weekly goal ring */
+.weekcard svg{flex:none}
+.wkdots{display:flex;gap:4px;margin-top:8px}
+.wk{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;border:1.5px solid var(--line);color:var(--faint)}
+.wk.gym{border-color:var(--accent);color:var(--acc-text)}
+.wk.run{border-color:var(--info);color:var(--info)}
+.wk.done{background:var(--good);border-color:var(--good);color:#fff}
+.wk.miss{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+.wk.now{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--text)}
+.streak{text-align:center;flex:none;min-width:54px}
+.streak b{display:block;font-size:24px;line-height:1}
+.streak span{font-size:11px;color:var(--muted);line-height:1.2}
+/* rice helper */
+.ricebox{margin:-2px 0 8px 44px;padding:8px 10px;border-radius:12px;background:var(--card2)}
+.ricebox .chip{padding:5px 10px;font-size:12px}
+/* muscle map */
+.heat{width:100%;max-width:340px;display:block;margin:0 auto}
+.heat .ht{font-size:10px;fill:var(--muted);font-weight:600}
+.lg{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px;border:1px solid var(--line)}
+.seg.sm button{padding:4px 10px;font-size:12px}
+/* PR celebration */
+.prbanner{margin:0 0 12px;padding:14px;border-radius:16px;text-align:center;color:#14171C;background:linear-gradient(135deg,#F5B301,#FFD866);animation:prpop .5s ease-out;cursor:pointer}
+.prbanner .prt{font-size:11px;font-weight:800;letter-spacing:1px}
+.prbanner .prn{font-weight:700;margin-top:4px}
+.prbanner .prv{font-size:30px;font-weight:900;line-height:1.15}
+@keyframes prpop{0%{transform:scale(.8);opacity:0}60%{transform:scale(1.04);opacity:1}100%{transform:scale(1)}}

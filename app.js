@@ -47,7 +47,7 @@ function defaults() {
     customEx: [], myQuotes: [], exNotes: {},
     stock: { nitrotech: { size: 40, start: t, adj: 0, tubG: 1810, scoopG: 45 }, creatine: { size: 60, start: t, adj: 0, tubG: 300, scoopG: 5 } },
     grocery: {},
-    settings: { waterTarget: 4, bottleOz: 30, stepsTarget: 8000, restC: 150, restI: 75, sound: true, theme: 'light', waterGoalL: null, checkinDays: 28, autoFlow: true, handsFree: false, setSec: 40, notify: true, bgAudio: false, waterRemind: true, waterEvery: 90, waterFrom: 8, waterTo: 22 },
+    settings: { waterTarget: 4, bottleOz: 30, stepsTarget: 8000, restC: 150, restI: 75, sound: true, theme: 'light', waterGoalL: null, checkinDays: 28, autoFlow: true, handsFree: false, setSec: 40, notify: true, bgAudio: false, waterRemind: true, waterEvery: 90, waterFrom: 8, waterTo: 22, gymRemind: true, gymEveAt: '17:30', gymMorning: true, gymMorningAt: '07:00' },
     lastBackup: null
   };
 }
@@ -159,6 +159,14 @@ function dayItems(date) {
     out.push({ key: k, slot: s.slot, food: st.food || it.food, qty: st.qty ?? it.qty, done: !!st.done, alts: it.alts });
   }));
   return out;
+}
+// rice helper: quick cup picker + what it does to today's calories
+const isRice = id => /rice/i.test(food(id).name) && /cup/i.test(food(id).unit);
+function planKcal(date) { let k = 0; for (const i of dayItems(date)) k += food(i.food).kcal * i.qty; for (const e of (S.days[date] || {}).extras || []) k += extraVals(e).kcal; return Math.round(k); }
+function riceHelper(date, i) {
+  const f = food(i.food), T = targets(), pk = planKcal(date), diff = pk - T.kcal;
+  return `<div class="ricebox"><div class="row wrap" style="gap:6px">${[1, 1.5, 2, 2.5, 3].map(v => `<button class="chip ${+i.qty === v ? 'on' : ''}" data-a="qtySet" data-d="${date}" data-k="${i.key}" data-v="${v}">${v} cup${v === 1 ? '' : 's'}</button>`).join('')}</div>
+  <div class="tiny ${diff > 50 ? 'bad' : diff < -150 ? 'muted' : 'good'}" style="margin-top:6px">1 cup = ${Math.round(f.kcal)} kcal · today's full plan: <b>${pk.toLocaleString()}</b> of ${T.kcal.toLocaleString()} kcal (${diff > 0 ? `${diff} over — try ${r1(Math.max(0, i.qty - Math.ceil(diff / f.kcal * 2) / 2))} cup${i.qty - Math.ceil(diff / f.kcal * 2) / 2 === 1 ? '' : 's'} here` : diff < 0 ? `${-diff} under` : 'right on target'})</div></div>`;
 }
 function extraVals(e) { if (e.food) { const f = food(e.food); return { name: f.name, kcal: f.kcal * e.qty, p: f.p * e.qty, c: f.c * e.qty, f: f.f * e.qty, amt: `${e.qty} × ${f.unit}` }; } return { name: e.name, kcal: e.kcal, p: e.p, c: e.c, f: e.f, amt: e.amt || '' }; }
 function dayTotals(date) {
@@ -284,20 +292,33 @@ function sessionPRs(date) {
   for (const e of s.entries) { const h = exHistory(e.ex), i = h.findIndex(x => x.date === date); if (i > 0 && h[i].best > Math.max(...h.slice(0, i).map(x => x.best)) + 0.01) prs.push(e.ex); }
   return [...new Set(prs)];
 }
+function prEvents() {
+  const out = [];
+  for (const id of usedExIds()) { let best = -1, prev = null; exHistory(id).forEach((x, i) => { const top = x.sets.reduce((a, z) => (e1rm(z.w, z.r) > e1rm(a.w, a.r) ? z : a)); if (i > 0 && x.best > best + 0.01) out.push({ id, date: x.date, top, prev }); if (x.best > best) { best = x.best; prev = top; } }); }
+  return out.sort((a, b) => (a.date < b.date ? 1 : -1));
+}
 function prCountBetween(a, b) {
   let n = 0;
   for (const id of usedExIds()) { let best = -1; exHistory(id).forEach((x, i) => { if (i > 0 && x.best > best + 0.01 && x.date > a && x.date <= b) n++; best = Math.max(best, x.best); }); }
   return n;
 }
-const planned = date => S.program.days[dow(date)];
+// the program that was active on a date: switching programs only changes today and later days
+const progFrom = () => S.program.from || (S.program.tid && (S.savedPrograms || [])[0] ? S.savedPrograms[0].savedAt : null);
+function progFor(date) {
+  const from = progFrom(); if (!from || date >= from) return S.program;
+  const older = (S.savedPrograms || []).filter(x => x.savedAt > date && x.program && x.program.days).sort((a, b) => a.savedAt < b.savedAt ? -1 : 1);
+  const hit = older.find(x => !x.program.from || date >= x.program.from) || older[0];
+  return hit ? hit.program : S.program;
+}
+const planned = date => progFor(date).days[dow(date)];
 const dayPick = {};
 // S.moves[date] = { rest: true, to } (rest day taken, workout moved to "to") or { k, from } (workout moved in from "from")
 function effKey(date) { if (dayPick[date] != null) return dayPick[date]; const m = (S.moves || {})[date]; if (m && m.rest) return 'rest'; if (m && m.k != null) return m.k; return dow(date); }
 const plannedFor = date => {
-  const s = S.sessions[date]; if (s) return { ...S.program.days[s.dow], name: s.name };
+  const s = S.sessions[date], P0 = progFor(date); if (s) return { ...(P0.days[s.dow] || S.program.days[s.dow]), name: s.name };
   const k = effKey(date), m = (S.moves || {})[date];
   if (k === 'rest') return { type: 'rest', name: 'Rest day (you chose to rest)', items: [], moved: m };
-  return { ...S.program.days[k], moved: dayPick[date] == null ? m : null };
+  return { ...(P0.days[k] || S.program.days[k]), moved: dayPick[date] == null ? m : null };
 };
 function dayStatus(date) {
   const p = plannedFor(date), s = S.sessions[date];
@@ -312,10 +333,37 @@ function streak() {
   for (let i = 0; i < 400; i++) { const st = dayStatus(d); if (st === 'done') n++; else if (st !== 'rest') break; d = addD(d, -1); }
   return n;
 }
+// ---------- weekly goal & week streak ----------
+function weekGoal(mon) {
+  let goal = 0, done = 0, runs = 0, runDone = 0; const days = [], t = today();
+  for (let i = 0; i < 7; i++) {
+    const d = addD(mon, i), base = progFor(d).days[dow(d)] || {}, p = plannedFor(d), s = S.sessions[d], gymDone = !!(s && s.done), rd = S.runs.some(r => r.date === d);
+    if (base.type === 'gym') goal++; if (base.type === 'run') { runs++; if (rd) runDone++; }
+    if (gymDone) done++;
+    days.push({ d, type: gymDone ? 'gym' : p.type, catchup: !!base.catchup, done: gymDone || (p.type === 'run' && rd), miss: d < t && d >= S.created && dayStatus(d) === 'miss', future: d > t });
+  }
+  return { mon, goal, done, runs, runDone, days };
+}
+function weekStreak() {
+  let n = 0, mon = monOf(today()); const first = monOf(S.created), cur = weekGoal(mon);
+  if (cur.goal && cur.done >= cur.goal) n++;
+  for (mon = addD(mon, -7); mon >= first; mon = addD(mon, -7)) { const w = weekGoal(mon); if (!w.goal) continue; if (w.done >= w.goal) n++; else break; }
+  return n;
+}
+function weekCard() {
+  const w = weekGoal(monOf(today())); if (!w.goal) return '';
+  const st = weekStreak(), pct = Math.min(1, w.done / w.goal), C = 2 * Math.PI * 30, left = Math.max(0, w.goal - w.done), t = today();
+  const slots = w.days.filter(x => x.d >= t && !x.done && (x.type === 'gym' || x.catchup)).length;
+  const msg = left === 0 ? '<b class="good">Week goal hit 🎉</b> Anything extra is a bonus.' : `<b>${left} to go</b> · ${slots} gym day${slots === 1 ? '' : 's'} left this week${left > slots ? ' — <span class="bad">use Friday catch-up or Switch workout</span>' : ''}`;
+  const dots = w.days.map(x => `<span class="wk ${x.done ? 'done' : x.miss ? 'miss' : x.type === 'gym' ? 'gym' : x.type === 'run' ? 'run' : 'rest'} ${x.d === t ? 'now' : ''}" title="${fmtD(x.d)}">${DN[dow(x.d)][0]}</span>`).join('');
+  return `<div class="card weekcard"><div class="row" style="gap:14px"><svg width="76" height="76" viewBox="0 0 76 76" aria-label="${w.done} of ${w.goal} workouts this week"><circle cx="38" cy="38" r="30" fill="none" stroke="var(--line)" stroke-width="8"/><circle cx="38" cy="38" r="30" fill="none" stroke="${pct >= 1 ? 'var(--good)' : 'var(--accent)'}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 38 38)"/><text x="38" y="43" text-anchor="middle" font-size="17" font-weight="800" fill="var(--text)">${w.done}/${w.goal}</text></svg>
+  <div class="grow"><div class="label">This week · workouts</div><div class="small" style="margin-top:2px">${msg}</div><div class="wkdots">${dots}</div>${w.runs ? `<div class="tiny muted" style="margin-top:4px">🏃 Run ${w.runDone ? 'done ✓' : 'planned'}</div>` : ''}</div>
+  <div class="streak"><b>${st}</b><span>week${st === 1 ? '' : 's'}<br>streak 🔥</span></div></div></div>`;
+}
 function weeklyVolume(date) {
   const mon = monOf(date), plan = {}, done = {};
   for (let i = 0; i < 7; i++) {
-    const d = addD(mon, i), p = S.program.days[dow(d)];
+    const d = addD(mon, i), p = planned(d);
     for (const it of p.items) { const m = ex(it.ex).muscle; plan[m] = (plan[m] || 0) + it.sets; }
     const s = S.sessions[d]; if (s) for (const e of s.entries) { const m = ex(e.ex).muscle; done[m] = (done[m] || 0) + e.sets.filter(x => x.done).length; }
   }
@@ -391,13 +439,18 @@ function adaptive(prev, cur) {
 
 // ---------- quotes & coach notes ----------
 function quoteOfDay() {
-  const pool = window.QUOTES.concat((S.myQuotes || []).map(x => ({ q: x.q, a: x.a || 'Saved by you' })));
-  const d = pd(today()), doy = Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 864e5);
+  // your own quotes: a new one shows the day you add it, then yours fill every other day
+  (S.myQuotes || []).forEach(x => { if (x && !x.added) x.added = today(); }); // quotes saved before this update show today
+  const mine = (S.myQuotes || []).filter(x => x && x.q).map(x => ({ q: x.q, a: x.a || 'Saved by you', added: x.added }));
+  const t = today(), d = pd(t), doy = Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 864e5), day = Math.floor(d / 864e5);
+  const fresh = mine.filter(x => x.added === t); if (fresh.length) return fresh[fresh.length - 1];
+  if (mine.length && day % 2 === 0) return mine[Math.floor(day / 2) % mine.length];
+  const pool = window.QUOTES;
   return pool[(doy * 7 + d.getFullYear()) % pool.length];
 }
 function coachNotes() {
   const n = [], t = today(), hr = new Date().getHours(), mon = monOf(t);
-  const st = streak(); if (st >= 2) n.push(`${st}-day training streak.`);
+  const st = weekStreak(); if (st >= 2) n.push(`${st} weeks in a row hitting your workout goal — keep the streak alive.`);
   const prs = prCountBetween(addD(mon, -1), t); if (prs) n.push(`${prs} PR${prs > 1 ? 's' : ''} this week.`);
   const pg = proteinGap(t); if (pg > 10) { const g = closeGap(pg); n.push(`Today's plan is ${pg} g protein short${g ? ` — add ${g}` : ''}.`); }
   if (hr >= 14 && waterMl(t) < waterGoal(t) / 2) n.push(`Only ${fmtL(waterMl(t))} of your ${fmtL(waterGoal(t))} water goal so far — drink up.`);
@@ -656,6 +709,38 @@ function waterReminder() {
   if (document.visibilityState === 'visible') { beep(); toast(`${title} — ${fmtL(left)} to go`, 6000); if (!P && route.tab === 'today') render(true); }
   else note('gf-water', title, body, { vibrate: [400, 150, 400], renotify: true, silent: false, requireInteraction: true, actions: [{ action: 'water250', title: '+ Glass 250 ml' }, { action: 'waterBottle', title: `+ Bottle ${S.settings.bottleOz} oz` }] });
 }
+// ---------- gym-day reminders (morning preview + evening nudge) ----------
+const hmStr = v => { const [a, b] = String(v || '0:0').split(':').map(Number); return hm(a || 0, b || 0); };
+function beatLine(date) {
+  const p = plannedFor(date); if (p.type !== 'gym') return '';
+  for (const it of p.items) { const sg = suggest(it, date); if (sg.last && sg.w) { const top = sg.last.sets.reduce((a, z) => (e1rm(z.w, z.r) > e1rm(a.w, a.r) ? z : a)); return `${ex(it.ex).name}: last ${r1(top.w)} kg × ${top.r} → today ${kg(sg.w)}${sg.w > top.w ? '' : ` for ${Math.min(it.max, top.r + 1)}+ reps`}`; } }
+  return '';
+}
+function gymReminderText(kind) {
+  const t = today(), p = plannedFor(t);
+  if (p.type === 'run') return { title: kind === 'eve' ? `🏃 Run day — ${nextLongRun()} km easy` : `🏃 Today: run ${nextLongRun()} km`, body: `Easy, conversational pace. Goal: 10 km.` };
+  const mins = estMinutes(p.items), beat = beatLine(t);
+  return { title: kind === 'eve' ? `🏋️ ${p.name} tonight · ~${mins} min` : `🏋️ Today: ${p.name}`, body: `${p.items.length} exercises · ~${mins} min${beat ? ` · Beat this: ${beat}` : ''}` };
+}
+function gymTick() {
+  const st = S.settings; if (!st.gymRemind) return;
+  const t = today(), p = plannedFor(t), s = S.sessions[t]; if (!['gym', 'run'].includes(p.type) || dayStatus(t) === 'done' || (s && s.startedAt) || P) return;
+  let sent = {}; try { sent = JSON.parse(localStorage.getItem('gf_gymrem') || '{}'); } catch (e) {} if (sent.d !== t) sent = { d: t };
+  const now = Date.now(), m0 = hmStr(st.gymMorningAt), e0 = hmStr(st.gymEveAt);
+  let kind = null; if (!sent.eve && now >= e0 && now < e0 + 3 * 3600e3) kind = 'eve'; else if (!sent.morn && st.gymMorning && now >= m0 && now < hm(12)) kind = 'morn';
+  if (!kind) return; sent[kind] = 1; try { localStorage.setItem('gf_gymrem', JSON.stringify(sent)); } catch (e) {}
+  const { title, body } = gymReminderText(kind);
+  if (document.visibilityState === 'visible') { if (kind === 'eve') beep(); toast(`${title} — ${body}`, 8000); }
+  else note('gf-gym', title, body, { vibrate: kind === 'eve' ? [400, 150, 400] : [200], renotify: true, silent: kind !== 'eve', requireInteraction: kind === 'eve' });
+}
+setInterval(gymTick, 30000); setTimeout(() => { try { gymTick(); } catch (e) {} }, 4000);
+function gymIcs() {
+  const st = S.settings, pad2 = n => String(n).padStart(2, '0'), d0 = new Date(), ymd = `${d0.getFullYear()}${pad2(d0.getMonth() + 1)}${pad2(d0.getDate())}`, BY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  const [eh, em] = String(st.gymEveAt || '17:30').split(':').map(Number); let ev = '', n = 0;
+  for (const k of [1, 2, 3, 4, 5, 6, 0]) { const d = S.program.days[k]; if (!d || !['gym', 'run'].includes(d.type)) continue; n++;
+    ev += `BEGIN:VEVENT\r\nUID:gf-gym-${k}@gherwin-fitness\r\nDTSTAMP:${ymd}T000000Z\r\nDTSTART:${ymd}T${pad2(eh)}${pad2(em)}00\r\nDURATION:PT10M\r\nRRULE:FREQ=WEEKLY;BYDAY=${BY[k]}\r\nSUMMARY:${d.type === 'run' ? '🏃 Run day' : '🏋️ ' + d.name.replace(/[,;]/g, ' ')}\r\nDESCRIPTION:Gherwin Fitness — open the app for today's weights.\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Workout\r\nTRIGGER:PT0M\r\nEND:VALARM\r\nEND:VEVENT\r\n`; }
+  return { n, text: `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Gherwin Fitness//Gym//EN\r\nCALSCALE:GREGORIAN\r\n${ev}END:VCALENDAR\r\n` };
+}
 function waterTick() { const t = nextWaterAt(); if (t && Date.now() >= t) waterReminder(); }
 setInterval(waterTick, 30000);
 function addWater(ml) { const d = today(), rec = dayRec(d, true); rec.waterMl = waterMl(d) + ml; rec.waterAt = Date.now(); delete rec.water; (rec.waterLog ||= []).push(ml); save(); clearNotes(['gf-water']); if (!P) render(true); toast(`+${ml} ml water · ${fmtL(waterMl(d))} of ${fmtL(waterGoal(d))}`); }
@@ -751,6 +836,7 @@ VIEWS.today = () => {
   const t = today(), T = targets(), p = plannedFor(t), s = S.sessions[t], q = quoteOfDay(), notes = coachNotes();
   let h = `<div class="card hl"><div class="quote">“${esc(q.q)}”</div><div class="small muted" style="margin-top:6px">— ${esc(q.a)}</div>${notes.length ? `<hr><ul class="notes small">${notes.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
   const md = missedDays();
+  h += weekCard();
   if (md.length) { const d0 = md[0]; h += `<div class="card"><div class="row between"><div class="grow"><div class="label">Missed workout</div><div style="font-weight:700;margin-top:2px">${fmtD(d0)} · ${esc(plannedFor(d0).name)}</div><div class="small muted">What happened?${md.length > 1 ? ` (${md.length} missed days to note)` : ''}</div></div><button class="btn sm primary" data-a="missedWhy" data-d="${d0}">Add reason</button></div></div>`; }
   const lc = latestCheckin();
   if (!lc || diffD(lc.date, t) >= (S.settings.checkinDays || 28)) h += `<div class="card"><div class="row between"><div><h3>Check-in ${lc ? 'due' : ''}</h3><div class="small muted">${lc ? `Last one: ${fmtD(lc.date)}` : 'Record your starting weight, waist and neck.'}</div></div><button class="btn primary sm" data-a="go" data-t="me" data-s="checkin">Check in</button></div></div>`;
@@ -886,7 +972,7 @@ function nextRestDay(date) { for (let i = 1; i <= 7; i++) { const d = addD(date,
 // free "catch-up" day: offer the gym workouts missed earlier this week
 function catchUps(date) {
   const d0 = S.program.days[dow(date)]; if (!d0 || !d0.catchup || S.sessions[date] || (S.moves || {})[date] || dayPick[date] != null) return [];
-  const out = []; for (let d = monOf(date); d < date; d = addD(d, 1)) { if ((S.moves || {})[d] || dayPick[d] != null) continue; const k = effKey(d); if (dayStatus(d) === 'miss' && S.program.days[k] && S.program.days[k].type === 'gym') out.push({ d, k }); }
+  const out = [], from = progFrom() || ''; for (let d = monOf(date) < from ? from : monOf(date); d < date; d = addD(d, 1)) { if ((S.moves || {})[d] || dayPick[d] != null) continue; const k = effKey(d); if (dayStatus(d) === 'miss' && S.program.days[k] && S.program.days[k].type === 'gym') out.push({ d, k }); }
   return out;
 }
 function catchUpBox(date) {
@@ -919,7 +1005,7 @@ function programSuggestCard(outgrown) {
 }
 function useProgram(prog, tid, name) {
   S.savedPrograms = (S.savedPrograms || []).filter(x => x.tid !== curPid()); S.savedPrograms.unshift({ name: S.program.name || 'Your original split', tid: curPid(), savedAt: today(), program: clone(S.program) }); S.savedPrograms = S.savedPrograms.slice(0, 5);
-  S.program = clone(prog); S.program.tid = tid; S.program.name = name; S.profile.programStart = monOf(today());
+  S.program = clone(prog); S.program.tid = tid; S.program.name = name; S.program.from = today(); S.profile.programStart = monOf(today());
   const t = today(); for (const d of Object.keys(S.moves || {})) if (d >= t) delete S.moves[d]; for (const d of Object.keys(S.sessions)) if (d >= t && !hasDone(S.sessions[d])) delete S.sessions[d]; for (const d of Object.keys(dayPick)) delete dayPick[d];
   save(); closeModal(); route.tab = 'train'; route.sub.train = 'session'; ctx.date = t; render(); toast(`Now on ${name} — today: ${plannedFor(t).name}`);
 }
@@ -936,16 +1022,39 @@ VIEWS.month = () => {
   }
   const doneM = Object.keys(S.sessions).filter(k => k.startsWith(ctx.month) && S.sessions[k].done).length + S.runs.filter(r => r.date.startsWith(ctx.month)).length;
   return h + `</div><div class="row wrap small muted" style="margin-top:10px;gap:14px"><span><span class="dot done"></span> done</span><span><span class="dot miss"></span> missed</span><span><span class="dot plan"></span> planned</span><span>💤 deload day</span><span>↔ switched / moved</span></div>
-  <div class="card" style="margin-top:12px"><div class="kpis"><div class="kpi"><b>${doneM}</b><span>sessions this month</span></div><div class="kpi"><b>${streak()}</b><span>day streak</span></div><div class="kpi"><b>Week ${weekIdx(today()) + 1}</b><span>of training block</span></div></div></div>`;
+  <div class="card" style="margin-top:12px"><div class="kpis"><div class="kpi"><b>${doneM}</b><span>sessions this month</span></div><div class="kpi"><b>${weekStreak()}</b><span>week streak</span></div><div class="kpi"><b>Week ${weekIdx(today()) + 1}</b><span>of training block</span></div></div></div>`;
 };
 
+// ---------- road to 10 km ----------
+function runPlan() {
+  const mon = monOf(today()), rk = [1, 2, 3, 4, 5, 6, 0].find(k => S.program.days[k] && S.program.days[k].type === 'run') ?? 6, off = (rk + 6) % 7;
+  const before = S.runs.filter(r => r.date < mon && diffD(r.date, mon) <= 28), base = before.length ? Math.max(...before.map(r => r.km)) : (S.runs.length ? Math.max(...S.runs.map(r => r.km)) : 8);
+  const weeks = []; let km = base;
+  for (let i = 0; i < 8; i++) {
+    const wm = addD(mon, 7 * i), day = addD(wm, off), recov = i > 0 && i % 4 === 3 && km < 10; if (!recov) km = Math.min(10, r1(km + (km < 10 ? 0.5 : 0)));
+    const target = recov ? r1(km * 0.8) : km, run = S.runs.filter(r => r.date >= wm && r.date <= addD(wm, 6)).sort((a, b) => b.km - a.km)[0];
+    weeks.push({ day, target, recov, run, goal: !recov && target >= 10 });
+    if (km >= 10 && weeks.filter(w => w.goal).length >= 2) break;
+  }
+  return { base, weeks };
+}
+const riegel = (sec, km, to) => sec * Math.pow(to / km, 1.06);
+function runPlanCard() {
+  const { base, weeks } = runPlan(), el = S.runs.filter(r => r.km >= 5), best = el.length ? el.reduce((a, r) => (riegel(r.sec, r.km, 10) < riegel(a.sec, a.km, 10) ? r : a)) : null;
+  const pred = best ? riegel(best.sec, best.km, 10) : null, bp = best ? best.sec / best.km : null;
+  return `<div class="card"><h3>🎯 Road to 10 km</h3><div class="small muted" style="margin-bottom:8px">From your longest recent run (${r1(base)} km): +0.5 km a week, with an easier week every 4th week so your legs keep up with leg days.</div>
+  ${weeks.map((w, i) => { const ok = w.run && w.run.km >= w.target - 0.05; return `<div class="check"><div style="width:62px" class="small ${i === 0 ? 'acc' : 'muted'}"><b>${fmtD(w.day)}</b>${i === 0 ? '<div class="tiny">this week</div>' : ''}</div><div class="grow"><b>${w.target} km</b> ${w.goal ? '<span class="pill good">10 km 🎯</span>' : w.recov ? '<span class="pill">easy week</span>' : ''}${w.run ? `<div class="tiny ${ok ? 'good' : 'muted'}">${ok ? '✓' : 'ran'} ${w.run.km} km in ${fmtTime(w.run.sec)} (${fmtTime(w.run.sec / w.run.km)}/km)</div>` : ''}</div></div>`; }).join('')}
+  ${pred ? `<div class="kpis" style="margin-top:10px"><div class="kpi"><b>${fmtTime(pred)}</b><span>predicted 10 km</span></div><div class="kpi"><b>${fmtTime(bp + 60)}–${fmtTime(bp + 90)}</b><span>easy pace /km</span></div></div><div class="tiny muted" style="margin-top:6px">Prediction from your best run (${best.km} km in ${fmtTime(best.sec)}). Run the long runs at the easy pace — you should be able to talk.</div>` : ''}</div>`;
+}
 VIEWS.runs = () => {
   const runs = [...S.runs].sort((a, b) => b.date.localeCompare(a.date)), longest = runs.length ? Math.max(...runs.map(r => r.km)) : 0;
   const el = runs.filter(r => r.km >= 3), bp = el.length ? el.reduce((a, r) => (r.sec / r.km < a.sec / a.km ? r : a)) : null;
   return `<div class="card accent"><div class="tiny muted">NEXT LONG RUN TARGET</div><div class="big">${nextLongRun()} km</div><div class="small muted">Easy, conversational pace. Goal: 10 km.</div></div>
   <div class="card"><h3>Log a run</h3><div class="grid3"><div><label class="f">Date</label><input type="date" id="runDate" value="${today()}"></div><div><label class="f">Distance (km)</label><input type="number" inputmode="decimal" step="0.1" id="runKm" placeholder="8"></div><div><label class="f">Time (mm:ss)</label><input type="text" inputmode="numeric" id="runTime" placeholder="45:00"></div></div><label class="f">Type</label><select id="runType"><option value="easy">Easy / long run</option><option value="timed">Timed effort</option><option value="intervals">Light + intense mix</option></select><button class="btn primary block" style="margin-top:10px" data-a="addRun">Save run</button></div>
   <div class="card"><div class="kpis"><div class="kpi"><b>${longest ? r1(longest) + ' km' : '–'}</b><span>longest</span></div><div class="kpi"><b>${bp ? fmtTime(bp.sec / bp.km) : '–'}</b><span>best pace /km</span></div><div class="kpi"><b>${runs.length}</b><span>runs logged</span></div></div></div>
+  ${runPlanCard()}
   <div class="card"><h3>Distance</h3>${lineChart([...runs].reverse().map(r => ({ d: r.date, y: r.km })), { color: '#5CB8FF' })}</div>
+  <div class="card"><h3>Pace (min per km — lower is faster)</h3>${lineChart([...runs].reverse().filter(r => r.km >= 2).map(r => ({ d: r.date, y: r1(r.sec / r.km / 60) })), { color: '#9450CF', empty: 'Log two runs to see your pace trend.' })}</div>
   <div class="card"><h3>History</h3>${runs.length ? `<table class="tbl"><tr><th>Date</th><th class="r">km</th><th class="r">Time</th><th class="r">Pace</th><th></th></tr>${runs.map(r => `<tr><td>${fmtD(r.date)}</td><td class="r">${r.km}</td><td class="r">${fmtTime(r.sec)}</td><td class="r">${fmtTime(r.sec / r.km)}</td><td class="r"><button class="iconbtn" data-a="delRun" data-id="${r.id}" aria-label="Delete">✕</button></td></tr>`).join('')}</table>` : '<div class="small muted">No runs yet. PR to beat: 8 km in 45:00.</div>'}</div>`;
 };
 
@@ -963,12 +1072,29 @@ VIEWS.program = () => {
   return h + `${saveBtn('Save split')}<br><button class="btn danger sm" data-a="resetProgram">Reset split to the original plan</button>`;
 };
 
+// ---------- muscle heat map ----------
+function heatMap(v) {
+  const g = k => v[k] || 0, val = { chest: g('chest'), shoulders: g('shoulders'), side: g('side delts'), rear: g('rear delts'), biceps: g('biceps'), triceps: g('triceps'), forearms: g('forearms'), abs: g('abs'), quads: g('quads') + g('adductors') + g('abductors'), back: g('back') + g('traps'), low: g('lower back'), glutes: g('glutes') + 0.5 * (g('quads') + g('hamstrings')), hams: g('hamstrings'), calves: g('calves') };
+  const col = n => (n >= 10 ? 'var(--good)' : n >= 6 ? 'var(--accent)' : n > 0 ? 'rgba(245,179,1,.38)' : 'var(--card2)');
+  const N = 'fill="var(--card2)" stroke="var(--line)"', M = (k, shape) => `<g fill="${col(val[k])}" stroke="var(--line)" stroke-width=".8"><title>${k}: ${r1(val[k])} sets</title>${shape}</g>`;
+  const pair = (cx, o, f) => f(cx - o) + f(cx + o), el = (x, y, rx, ry) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}"/>`;
+  const front = `<circle cx="50" cy="16" r="11" ${N}/><rect x="45" y="26" width="10" height="8" ${N}/>` + `<g ${N}>${pair(50, 28, x => el(x, 88, 4, 11))}${pair(50, 9, x => el(x, 172, 5, 16))}${pair(50, 9, x => el(x, 196, 5, 4))}</g>`
+    + M('side', pair(50, 27, x => el(x, 46, 4.5, 8))) + M('shoulders', pair(50, 19, x => el(x, 41, 7, 6.5))) + M('chest', `<rect x="35" y="37" width="14" height="19" rx="5"/><rect x="51" y="37" width="14" height="19" rx="5"/>`)
+    + M('biceps', pair(50, 25, x => el(x, 64, 5, 11))) + M('forearms', '') + M('abs', `<rect x="40" y="58" width="20" height="38" rx="6"/>`) + M('quads', pair(50, 9, x => el(x, 124, 8, 24)));
+  const back = `<circle cx="50" cy="16" r="11" ${N}/><g ${N}>${pair(50, 28, x => el(x, 88, 4, 11))}${pair(50, 9, x => el(x, 196, 5, 4))}</g>`
+    + M('back', `<path d="M40 30h20l9 10-19 10-19-10z"/><path d="M35 48h30l-3 32-12 7-12-7z"/>`) + M('rear', pair(50, 22, x => el(x, 43, 6.5, 6))) + M('triceps', pair(50, 25, x => el(x, 64, 5, 11)))
+    + M('low', `<rect x="41" y="86" width="18" height="12" rx="4"/>`) + M('glutes', pair(50, 8, x => el(x, 109, 9, 9))) + M('hams', pair(50, 9, x => el(x, 138, 7, 20))) + M('calves', pair(50, 9, x => el(x, 176, 6, 15)));
+  return `<svg viewBox="0 0 230 212" class="heat" role="img" aria-label="Muscle map"><g transform="translate(5,6)">${front}</g><g transform="translate(125,6)">${back}</g><text x="55" y="210" text-anchor="middle" class="ht">Front</text><text x="175" y="210" text-anchor="middle" class="ht">Back</text></svg>
+  <div class="row wrap tiny muted" style="gap:10px;justify-content:center;margin-top:6px"><span><i class="lg" style="background:var(--card2)"></i>0</span><span><i class="lg" style="background:rgba(245,179,1,.38)"></i>1–5 low</span><span><i class="lg" style="background:var(--accent)"></i>6–9 OK</span><span><i class="lg" style="background:var(--good)"></i>10+ growth zone</span></div>`;
+}
 VIEWS.volume = () => {
   const v = weeklyVolume(today()), ms = [...new Set([...Object.keys(v.plan), ...Object.keys(v.done)])];
   const order = ['back', 'chest', 'side delts', 'shoulders', 'rear delts', 'triceps', 'biceps', 'quads', 'hamstrings', 'glutes', 'calves', 'abs', 'lower back'];
   ms.sort((a, b) => (order.indexOf(a) + 99) % 99 - (order.indexOf(b) + 99) % 99);
   const verdict = n => (n >= 10 ? '<span class="pill good">Good</span>' : n >= 6 ? '<span class="pill acc">OK</span>' : '<span class="pill bad">Low</span>');
-  return `<div class="card"><h3>Sets per muscle — week of ${fmtD(monOf(today()))}</h3><div class="small muted" style="margin-bottom:8px">Direct working sets. 10–20 a week is the growth sweet spot; 6–9 grows slowly. Pressing and pulling also train arms and shoulders indirectly.</div><table class="tbl"><tr><th>Muscle</th><th class="r">Planned</th><th class="r">Done</th><th></th></tr>${ms.map(m => `<tr><td>${esc(m)}</td><td class="r">${v.plan[m] || 0}</td><td class="r">${v.done[m] || 0}</td><td class="r">${verdict(v.plan[m] || 0)}</td></tr>`).join('')}</table></div>`;
+  const mode = ctx.heat || (Object.keys(v.done).length ? 'done' : 'plan'), weakest = ['side delts', 'back', 'quads', 'hamstrings', 'chest'].filter(m => (v.plan[m] || 0) > 0 && (v.done[m] || 0) < 6 && mode === 'done');
+  return `<div class="card"><div class="row between"><h3 style="margin:0">Muscle map</h3><div class="seg sm">${[['done', 'Done'], ['plan', 'Planned']].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-a="heat" data-v="${k}">${l}</button>`).join('')}</div></div><div class="tiny muted" style="margin:4px 0 6px">${mode === 'done' ? 'Sets you actually did this week' : "This week's plan"} — grey or pale means that muscle is getting little work.</div>${heatMap(mode === 'done' ? v.done : v.plan)}${weakest.length && dow(today()) >= 4 ? `<div class="sug" style="margin-top:8px">Behind this week: ${esc(weakest.join(', '))}. Friday catch-up is the place to fix it.</div>` : ''}</div>
+  <div class="card"><h3>Sets per muscle — week of ${fmtD(monOf(today()))}</h3><div class="small muted" style="margin-bottom:8px">Direct working sets. 10–20 a week is the growth sweet spot; 6–9 grows slowly. Pressing and pulling also train arms and shoulders indirectly.</div><table class="tbl"><tr><th>Muscle</th><th class="r">Planned</th><th class="r">Done</th><th></th></tr>${ms.map(m => `<tr><td>${esc(m)}</td><td class="r">${v.plan[m] || 0}</td><td class="r">${v.done[m] || 0}</td><td class="r">${verdict(v.plan[m] || 0)}</td></tr>`).join('')}</table></div>`;
 };
 
 VIEWS.log = () => {
@@ -982,7 +1108,7 @@ VIEWS.log = () => {
     const f = food(i.food);
     if (i.slot !== slot) { h += `<div class="tiny muted" style="margin-top:${slot ? 14 : 4}px;letter-spacing:.5px">${esc(i.slot.toUpperCase())}</div>`; slot = i.slot; }
     const alts = i.alts ? `<select data-c="swapFood" data-d="${date}" data-k="${i.key}" class="mini">${i.alts.filter(a => S.foods[a]).map(a => `<option value="${a}" ${a === i.food ? 'selected' : ''}>${esc(S.foods[a].name)}</option>`).join('')}</select>` : '';
-    h += `<div class="check"><button class="tick ${i.done ? 'on' : ''}" data-a="tickFood" data-d="${date}" data-k="${i.key}">${i.done ? '✓' : ''}</button><div class="grow"><div>${esc(f.name)}</div><div class="tiny faint">${esc(f.unit)} · ${Math.round(f.kcal * i.qty)} kcal · ${r1(f.p * i.qty)} g protein</div>${alts}</div><div class="qty"><button data-a="qty" data-d="${date}" data-k="${i.key}" data-n="-1">−</button><span>${i.qty}</span><button data-a="qty" data-d="${date}" data-k="${i.key}" data-n="1">+</button></div></div>`;
+    h += `<div class="check"><button class="tick ${i.done ? 'on' : ''}" data-a="tickFood" data-d="${date}" data-k="${i.key}">${i.done ? '✓' : ''}</button><div class="grow"><div>${esc(f.name)}</div><div class="tiny faint">${esc(f.unit)} · ${Math.round(f.kcal * i.qty)} kcal · ${r1(f.p * i.qty)} g protein</div>${alts}</div><div class="qty"><button data-a="qty" data-d="${date}" data-k="${i.key}" data-n="-1">−</button><span>${i.qty}</span><button data-a="qty" data-d="${date}" data-k="${i.key}" data-n="1">+</button></div></div>${isRice(i.food) ? riceHelper(date, i) : ''}`;
   });
   return h + `</div>` + waterCard(date);
 };
@@ -1106,6 +1232,8 @@ VIEWS.lifts = () => {
   <div class="kpis" style="margin-top:10px"><div class="kpi"><b>${r1(best.best)}${best.sets.some(s => s.w) ? ' kg' : ' reps'}</b><span>best est. 1-rep max</span></div><div class="kpi"><b>${h0.length}</b><span>sessions</span></div><div class="kpi"><b>${r1(Math.max(...h0[h0.length - 1].sets.map(s => s.w)))} kg</b><span>current top weight</span></div></div>
   <h3 style="margin-top:12px">Estimated 1-rep max</h3>${lineChart(h0.map(x => ({ d: x.date, y: x.best })))}</div>`;
   h += `<div class="card"><h3>History</h3><table class="tbl"><tr><th>Date</th><th>Sets</th><th class="r">e1RM</th></tr>${[...h0].reverse().map(x => `<tr><td>${fmtD(x.date)}</td><td class="small">${x.sets.map(s => (s.w ? r1(s.w) + '×' : 'BW×') + s.r).join(', ')}</td><td class="r">${r1(x.best)}</td></tr>`).join('')}</table></div>`;
+  const pe = prEvents().slice(0, 12), fs = z => (z.w ? r1(z.w) + ' kg × ' : 'BW × ') + z.r;
+  if (pe.length) h += `<div class="card"><h3>🏆 Recent records</h3><table class="tbl">${pe.map(x => `<tr><td class="small faint">${fmtD(x.date)}</td><td>${esc(ex(x.id).name)}<div class="tiny faint">was ${fs(x.prev)}</div></td><td class="r"><b>${fs(x.top)}</b></td></tr>`).join('')}</table></div>`;
   return h + `<div class="card"><h3>All personal records</h3><table class="tbl">${ids.map(id => { const b = exHistory(id).reduce((a, x) => (x.best > a.best ? x : a)), top = b.sets.reduce((a, s) => (e1rm(s.w, s.r) > e1rm(a.w, a.r) ? s : a)); return `<tr><td>${esc(ex(id).name)}</td><td class="r">${top.w ? r1(top.w) + ' kg × ' : ''}${top.r}</td><td class="r faint small">${fmtD(b.date)}</td></tr>`; }).join('')}</table></div>`;
 };
 
@@ -1150,7 +1278,7 @@ VIEWS.profile = () => {
   <label class="f">Activity level</label><select data-c="prof" data-f="activity"><option value="1.375" ${p.activity == 1.375 ? 'selected' : ''}>Light — 3–4 training days</option><option value="1.55" ${p.activity == 1.55 ? 'selected' : ''}>Moderate — 5–6 training days</option><option value="1.725" ${p.activity == 1.725 ? 'selected' : ''}>Very active — daily training + active job</option></select></div>
   <div class="card"><h3>Manual overrides</h3><div class="small muted">Leave empty to use the automatic numbers.</div><div class="grid3"><div><label class="f">kcal</label><input type="number" data-c="ovr" data-f="kcal" value="${S.overrides.kcal ?? ''}"></div><div><label class="f">Protein g</label><input type="number" data-c="ovr" data-f="protein" value="${S.overrides.protein ?? ''}"></div><div><label class="f">Fat g</label><input type="number" data-c="ovr" data-f="fat" value="${S.overrides.fat ?? ''}"></div></div>${p.kcalOffset ? `<button class="btn sm" style="margin-top:10px" data-a="resetOffset">Reset calorie adjustment (${p.kcalOffset} kcal)</button>` : ''}</div>
   <div class="card"><h3>Appearance</h3><div class="seg">${[['light', 'Light'], ['dark', 'Dark'], ['auto', 'Match phone']].map(([k, l]) => `<button class="${(S.settings.theme || 'light') === k ? 'on' : ''}" data-a="theme" data-v="${k}">${l}</button>`).join('')}</div></div>
-  <div class="card"><h3>Daily habits & workout player</h3><div class="grid3"><div><label class="f">Water goal (L)</label><input type="number" step="0.1" data-c="waterGoal" value="${S.settings.waterGoalL ?? ''}" placeholder="auto ${r1(waterGoal(today()) / 1000)}"></div><div><label class="f">Bottle (oz)</label><input type="number" data-c="set" data-f="bottleOz" value="${S.settings.bottleOz}"></div><div><label class="f">Steps target</label><input type="number" data-c="set" data-f="stepsTarget" value="${S.settings.stepsTarget}"></div></div><div class="grid2"><div><label class="f">Rest, big lifts (sec)</label><input type="number" data-c="set" data-f="restC" value="${S.settings.restC}"></div><div><label class="f">Rest, isolation (sec)</label><input type="number" data-c="set" data-f="restI" value="${S.settings.restI}"></div></div><label class="small muted cb"><input type="checkbox" data-c="sound" ${S.settings.sound ? 'checked' : ''}> Beep when rest is over</label><label class="f">Hands-free: seconds per set</label><input type="number" data-c="set" data-f="setSec" value="${S.settings.setSec || 40}"><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="autoFlow" ${S.settings.autoFlow ? 'checked' : ''}> Auto-continue workout (no taps between exercises)</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="notify" ${S.settings.notify ? 'checked' : ''}> Lock-screen timer & alarm notifications</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="bgAudio" ${S.settings.bgAudio ? 'checked' : ''}> Extra-reliable timer with screen off (plays silent audio — <b>pauses Spotify/YouTube music</b>)</label><label class="f">Check-in reminder</label><div class="seg">${[[14, 'Every 2 weeks'], [28, 'Every 4 weeks']].map(([v, l]) => `<button class="${(S.settings.checkinDays || 28) === v ? 'on' : ''}" data-a="ciEvery" data-v="${v}">${l}</button>`).join('')}</div></div>${saveBtn()}`;
+  <div class="card"><h3>Daily habits & workout player</h3><div class="grid3"><div><label class="f">Water goal (L)</label><input type="number" step="0.1" data-c="waterGoal" value="${S.settings.waterGoalL ?? ''}" placeholder="auto ${r1(waterGoal(today()) / 1000)}"></div><div><label class="f">Bottle (oz)</label><input type="number" data-c="set" data-f="bottleOz" value="${S.settings.bottleOz}"></div><div><label class="f">Steps target</label><input type="number" data-c="set" data-f="stepsTarget" value="${S.settings.stepsTarget}"></div></div><div class="grid2"><div><label class="f">Rest, big lifts (sec)</label><input type="number" data-c="set" data-f="restC" value="${S.settings.restC}"></div><div><label class="f">Rest, isolation (sec)</label><input type="number" data-c="set" data-f="restI" value="${S.settings.restI}"></div></div><label class="small muted cb"><input type="checkbox" data-c="sound" ${S.settings.sound ? 'checked' : ''}> Beep when rest is over</label><label class="f">Hands-free: seconds per set</label><input type="number" data-c="set" data-f="setSec" value="${S.settings.setSec || 40}"><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="autoFlow" ${S.settings.autoFlow ? 'checked' : ''}> Auto-continue workout (no taps between exercises)</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="notify" ${S.settings.notify ? 'checked' : ''}> Lock-screen timer & alarm notifications</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="bgAudio" ${S.settings.bgAudio ? 'checked' : ''}> Extra-reliable timer with screen off (plays silent audio — <b>pauses Spotify/YouTube music</b>)</label><label class="f">Workout reminders</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="gymRemind" ${S.settings.gymRemind ? 'checked' : ''}> Remind me on gym & run days</label><div class="grid2"><div><label class="f">Evening nudge</label><input type="time" data-c="set" data-f="gymEveAt" data-str="1" value="${esc(S.settings.gymEveAt || '17:30')}"></div><div><label class="f">Morning preview</label><input type="time" data-c="set" data-f="gymMorningAt" data-str="1" value="${esc(S.settings.gymMorningAt || '07:00')}"></div></div><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="gymMorning" ${S.settings.gymMorning ? 'checked' : ''}> Morning preview (today's workout + the weight to beat)</label><div class="row" style="gap:6px;margin-top:8px"><button class="btn sm" data-a="gymTest">🔔 Test</button><button class="btn sm" data-a="gymCal">📅 Add to calendar (rings even when the app is closed)</button></div><label class="f">Check-in reminder</label><div class="seg">${[[14, 'Every 2 weeks'], [28, 'Every 4 weeks']].map(([v, l]) => `<button class="${(S.settings.checkinDays || 28) === v ? 'on' : ''}" data-a="ciEvery" data-v="${v}">${l}</button>`).join('')}</div></div>${saveBtn()}`;
 };
 
 VIEWS.supps = () => {
@@ -1164,7 +1292,7 @@ VIEWS.supps = () => {
   };
   return `<div class="small muted" style="margin-bottom:10px">Counts go down as you tick your doses. When a tub will run out before your next Sunday shop, it goes on the grocery list automatically.</div>${card('nitrotech')}${card('creatine')}`;
 };
-VIEWS.quotes = () => `<div class="card"><h3>Add your own quote</h3><div class="small muted">Lines you like from James Clear, Alex Hormozi or anyone else. They rotate with the built-in ones.</div><label class="f">Quote</label><textarea id="qText" rows="3"></textarea><label class="f">Author / book</label><input type="text" id="qAuthor" placeholder="e.g. James Clear, Atomic Habits"><button class="btn primary block" style="margin-top:10px" data-a="addQuote">Save quote</button></div>
+VIEWS.quotes = () => `<div class="card"><h3>Add your own quote</h3><div class="small muted">Lines you like from James Clear, Alex Hormozi or anyone else. A new quote shows on Today the day you add it; after that your quotes show every other day.</div><label class="f">Quote</label><textarea id="qText" rows="3"></textarea><label class="f">Author / book</label><input type="text" id="qAuthor" placeholder="e.g. James Clear, Atomic Habits"><button class="btn primary block" style="margin-top:10px" data-a="addQuote">Save quote</button></div>
   ${(S.myQuotes || []).length ? `<div class="card"><h3>Your quotes</h3>${S.myQuotes.map((x, i) => `<div class="check"><div class="grow">“${esc(x.q)}”<div class="tiny faint">— ${esc(x.a || '')}</div></div><button class="iconbtn" data-a="delQuote" data-i="${i}">✕</button></div>`).join('')}</div>` : ''}
   <div class="card"><h3>Built-in (${window.QUOTES.length})</h3>${window.QUOTES.map(x => `<div class="check"><div class="grow small">“${esc(x.q)}”<div class="tiny faint">— ${esc(x.a)}</div></div></div>`).join('')}</div>`;
 
@@ -1300,8 +1428,9 @@ function renderPlayer() {
     ${nx ? `<div class="card" style="margin-top:16px"><div class="tiny muted">UP NEXT</div><div class="row" style="margin-top:6px">${thumb(nx.ex, 56)}<div class="grow"><b>${esc(ex(nx.ex).name)}</b><div class="small muted">${nx.sets.length} sets · ${nx.t.min}–${nx.t.max} reps</div></div></div></div>` : ''}`;
   } else if (P.phase === 'summary') {
     const sets = s.entries.reduce((a, q) => a + q.sets.filter(z => z.done).length, 0), vol = s.entries.reduce((a, q) => a + q.sets.filter(z => z.done).reduce((b, z) => b + (num(z.w) || 0) * (num(z.r) || 0), 0), 0), prs = sessionPRs(P.date);
-    body = `<div class="p-restbig"><div class="tiny acc">WORKOUT COMPLETE</div><div class="p-count">${fmtTime(((s.endedAt || Date.now()) - s.startedAt) / 1000)}</div></div><div class="kpis"><div class="kpi"><b>${sets}</b><span>sets</span></div><div class="kpi"><b>${Math.round(vol).toLocaleString()} kg</b><span>total volume</span></div><div class="kpi"><b>${prs.length}</b><span>PRs</span></div></div>${prs.length ? `<div class="card" style="margin-top:12px"><h3>New records</h3>${prs.map(id => `<div class="small">• ${esc(ex(id).name)}</div>`).join('')}</div>` : ''}<button class="btn primary block p-main" style="margin-top:16px" data-a="pClose">Close</button>`;
+    body = `<div class="p-restbig"><div class="tiny acc">WORKOUT COMPLETE</div><div class="p-count">${fmtTime(((s.endedAt || Date.now()) - s.startedAt) / 1000)}</div></div><div class="kpis"><div class="kpi"><b>${sets}</b><span>sets</span></div><div class="kpi"><b>${Math.round(vol).toLocaleString()} kg</b><span>total volume</span></div><div class="kpi"><b>${prs.length}</b><span>PRs</span></div></div>${prs.length ? `<div class="sug" style="margin-top:10px">🏆 New best${prs.length > 1 ? 's' : ''}: <b>${esc(prs.map(id => ex(id).name).join(', '))}</b></div>` : ''}${prs.length ? `<div class="card" style="margin-top:12px"><h3>New records</h3>${prs.map(id => `<div class="small">• ${esc(ex(id).name)}</div>`).join('')}</div>` : ''}<button class="btn primary block p-main" style="margin-top:16px" data-a="pClose">Close</button>`;
   }
+  if (P.pr && Date.now() < P.pr.until && P.phase !== 'summary') body = `<div class="prbanner" data-a="prClose"><div class="prt">🏆 NEW PERSONAL BEST</div><div class="prn">${esc(P.pr.name)}</div><div class="prv">${esc(P.pr.now)}</div><div class="tiny">beats ${esc(P.pr.was)} from ${fmtD(P.pr.date)}</div></div>` + body;
   $('#player').innerHTML = `<div class="p-wrap">${head}<div class="p-body">${body}</div></div>`;
 }
 // ---------- exercise order: choose next / drag to reorder ----------
@@ -1610,6 +1739,10 @@ A.pDone = () => {
   if (!(num(set.r) > 0)) return toast('Enter your reps.');
   if (set.w === '' && ex(e.ex).kind !== 'b') return toast('Enter the weight (kg).');
   set.done = true; P.lastSet = { i: P.ei, j: P.si };
+  if (!s.deload) { const h = exHistory(e.ex, P.date), was = h.length ? Math.max(...h.map(x => x.best)) : null, now = e1rm(num(set.w) || 0, num(set.r)); P.prSeen = P.prSeen || {};
+    if (was != null && now > was + 0.01 && !P.prSeen[e.ex]) { P.prSeen[e.ex] = 1; const old = h.reduce((a, x) => (x.best > a.best ? x : a)), top = old.sets.reduce((a, z) => (e1rm(z.w, z.r) > e1rm(a.w, a.r) ? z : a));
+      P.pr = { name: ex(e.ex).name, now: `${num(set.w) ? r1(set.w) + ' kg × ' : ''}${set.r}`, was: `${top.w ? r1(top.w) + ' kg × ' : ''}${top.r}`, date: old.date, until: Date.now() + 9000 };
+      try { navigator.vibrate && navigator.vibrate([120, 60, 120, 60, 300]); } catch (x) {} } }
   for (let j = P.si + 1; j < e.sets.length; j++) if (!e.sets[j].done && (e.sets[j].w === '' || e.sets[j].w == null)) e.sets[j].w = set.w;
   save();
   const undone = q => (q ? q.sets.findIndex(z => !z.done) : -1);
@@ -1725,6 +1858,7 @@ A.pDel = el => { S.program.days[el.dataset.k].items.splice(+el.dataset.i, 1); sa
 A.pAdd = el => { const k = el.dataset.k; pickExercise(id => { const e = ex(id); S.program.days[k].items.push({ ex: id, sets: 3, min: e.kind === 'c' ? 8 : 10, max: e.kind === 'c' ? 12 : 15 }); save(); render(true); }); };
 A.resetProgram = () => { if (confirm('Reset your split to the original plan?')) { S.program = clone(window.DEFAULT_PROGRAM); save(); render(); } };
 A.tickFood = el => { const d = el.dataset.d, k = el.dataset.k, rec = dayRec(d, true), it = dayItems(d).find(i => i.key === k); rec.items[k] = { food: it.food, qty: it.qty, done: !it.done }; save(); render(true); };
+A.qtySet = el => { const d = el.dataset.d, k = el.dataset.k, rec = dayRec(d, true), it = dayItems(d).find(i => i.key === k); rec.items[k] = { food: it.food, qty: +el.dataset.v, done: it.done }; save(); render(true); };
 A.qty = el => { const d = el.dataset.d, k = el.dataset.k, rec = dayRec(d, true), it = dayItems(d).find(i => i.key === k); rec.items[k] = { food: it.food, qty: Math.max(0, r1(it.qty + stepFor(it.food) * +el.dataset.n)), done: it.done }; save(); render(true); };
 A.waterAdd = el => { const d = el.dataset.d, ml = +el.dataset.ml, rec = dayRec(d, true); rec.waterMl = waterMl(d) + ml; if (d === today()) rec.waterAt = Date.now(); delete rec.water; (rec.waterLog ||= []).push(ml); save(); render(true); if (waterMl(d) >= waterGoal(d) && waterMl(d) - ml < waterGoal(d)) toast('Water goal reached 💧'); };
 A.waterUndo = el => { const d = el.dataset.d, rec = dayRec(d, true), last = (rec.waterLog || []).pop() || bottleMl(); rec.waterMl = Math.max(0, waterMl(d) - last); delete rec.water; save(); render(true); };
@@ -1740,6 +1874,14 @@ A.waterSet = () => {
 };
 A.waterEvery = el => { S.settings.waterEvery = +el.dataset.v; save(); A.waterSet(); render(true); };
 A.waterTest = async () => { if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission(); S.settings.notify = true; save(); note('gf-water', '💧 Time to drink water', `Test reminder · ${fmtL(waterMl(today()))} of ${fmtL(waterGoal(today()))} so far.`, { vibrate: [400, 150, 400], renotify: true, silent: false, actions: [{ action: 'water250', title: '+ Glass 250 ml' }, { action: 'waterBottle', title: `+ Bottle ${S.settings.bottleOz} oz` }] }); beep(); toast(Notification.permission === 'granted' ? 'Test sent — check your notifications' : 'Allow notifications in phone Settings › Apps › Chrome'); };
+A.gymTest = async () => { if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission(); S.settings.notify = true; save(); const { title, body } = gymReminderText('eve'); note('gf-gym', title, body, { vibrate: [400, 150, 400], renotify: true, silent: false }); beep(); toast(`${title} — ${body}`, 8000); };
+A.gymCal = () => {
+  const { n, text } = gymIcs(); if (!n) return toast('No gym or run days in your split.');
+  const blob = new Blob([text], { type: 'text/calendar' }), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Gherwin-workout-reminders.ics'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  openModal(`<div class="row between"><h2 style="margin:0">Add to calendar</h2><button class="iconbtn" data-a="close">✕</button></div><div class="small" style="margin-top:8px">Downloaded <b>Gherwin-workout-reminders.ics</b> — ${n} weekly reminders at ${esc(S.settings.gymEveAt || '17:30')} on your gym and run days.</div>
+  <ol class="steps"><li>Open <b>Files › Downloads</b> and tap the file.</li><li>Choose <b>Calendar</b> and tap <b>Import / Save</b>.</li><li>Or on your laptop: <b>calendar.google.com › ⚙️ Settings › Import & export › Import</b>.</li></ol>
+  <div class="tiny muted">If you change program later, delete the old events and add the new file.</div><button class="btn primary block" data-a="close">OK</button>`);
+};
 A.waterCal = () => {
   const { n, text } = waterIcs(); if (!n) return toast('Pick a wider time range first.');
   const blob = new Blob([text], { type: 'text/calendar' }), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Gherwin-water-reminders.ics'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
@@ -1958,7 +2100,7 @@ A.newTub = el => {
 function tubVals() { const w = num($('#tubW').value) || 0, u = $('#tubU').value, sg = num($('#tubS').value) || 0, used = num($('#tubUsed').value) || 0; const g = u === 'kg' ? w * 1000 : u === 'lb' ? w * 453.592 : w; return { g: Math.round(g), sg, used, n: sg > 0 ? Math.floor(g / sg) : 0 }; }
 A.saveTub = el => { const v = tubVals(); if (!v.n) return toast('Enter the tub size and serving size.'); const k = el.dataset.k, st = S.stock[k], rec = S.days[today()]; let doneToday = 0; if (rec) { for (const x of Object.values(rec.items)) if (x.done && food(x.food).stock === k) doneToday += x.qty; for (const e of rec.extras || []) if (e.food && food(e.food).stock === k) doneToday += e.qty; } Object.assign(st, { tubG: v.g, scoopG: v.sg, size: v.n, start: today(), adj: doneToday - v.used }); save(); closeModal(); toast(`New tub: ${v.n - v.used} servings left`); render(true); };
 A.adjStock = el => { const k = el.dataset.k, si = stockInfo(k), n = num(prompt('How many servings are actually left in the tub?', si.left)); if (n == null) return; S.stock[k].adj = (S.stock[k].adj || 0) + (n - si.left); save(); render(true); };
-A.addQuote = () => { const q = $('#qText').value.trim(); if (!q) return toast('Type the quote first.'); S.myQuotes.push({ q, a: $('#qAuthor').value.trim() }); save(); toast('Quote saved ✓'); render(true); };
+A.addQuote = () => { const q = $('#qText').value.trim(); if (!q) return toast('Type the quote first.'); S.myQuotes.push({ q, a: $('#qAuthor').value.trim(), added: today() }); save(); toast('Quote saved ✓ — it shows on Today'); render(true); };
 A.delQuote = el => { S.myQuotes.splice(+el.dataset.i, 1); save(); render(true); };
 A.exportPDF = () => exportPDF().catch(e => { console.error(e); toast('Backup failed: ' + e.message); });
 A.restore = () => restorePDF().catch(e => { console.error(e); toast('Restore failed: ' + e.message); });
@@ -1994,12 +2136,12 @@ C.tItemAlt = el => { const it = S.templates[ctx.tpl][+el.dataset.si].items[+el.d
 C.liftEx = el => { ctx.liftEx = el.value; render(true); };
 C.prof = el => { const f = el.dataset.f; S.profile[f] = f === 'goal' ? el.value : num(el.value); save(); render(true); };
 C.ovr = el => { S.overrides[el.dataset.f] = num(el.value); save(); render(true); };
-C.set = el => { const v = num(el.value); if (v) S.settings[el.dataset.f] = v; save(); };
+C.set = el => { if (el.dataset.str) { if (el.value) S.settings[el.dataset.f] = el.value; try { localStorage.removeItem('gf_gymrem'); } catch (e) {} save(); return; } const v = num(el.value); if (v) S.settings[el.dataset.f] = v; save(); };
 A.ciEvery = el => { S.settings.checkinDays = +el.dataset.v; save(); render(true); };
 A.theme = el => { S.settings.theme = el.dataset.v; applyTheme(); save(); render(true); };
 C.waterGoal = el => { S.settings.waterGoalL = num(el.value) || null; save(); render(true); };
 C.waterHr = el => { const st = S.settings; st[el.dataset.f] = +el.value; if (st.waterTo <= st.waterFrom) { if (el.dataset.f === 'waterFrom') st.waterTo = Math.min(24, st.waterFrom + 1); else st.waterFrom = Math.max(0, st.waterTo - 1); toast('"Until" must be after "From" — adjusted.'); A.waterSet(); } save(); render(true); };
-C.tgl = el => { S.settings[el.dataset.f] = el.checked; save(); if (el.dataset.f === 'notify' && el.checked && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission(); };
+C.tgl = el => { S.settings[el.dataset.f] = el.checked; save(); if (el.dataset.f === 'gymRemind' && el.checked && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission(); if (el.dataset.f === 'notify' && el.checked && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission(); };
 C.sound = el => { S.settings.sound = el.checked; save(); };
 I.tub = () => { const v = tubVals(), c = $('#tubCalc'); if (c) c.innerHTML = v.n ? `<b>${v.n - v.used}</b><span class="small">${v.n} servings in the tub${v.used ? ` − ${v.used} used` : ''} (${v.g} g ÷ ${v.sg} g)</span>` : '<span class="small muted">Enter tub size and serving size</span>'; };
 C.tubU = () => I.tub();
@@ -2030,6 +2172,8 @@ A.catchUp = el => {
   S.moves[from] = { rest: true, to: d, k0: k }; S.moves[d] = { k, from }; delete S.sessions[d];
   save(); render(true); toast(`🔁 ${S.program.days[k].name} moved to today — ${fmtD(from)} counts as rest`);
 };
+A.heat = el => { ctx.heat = el.dataset.v; render(true); };
+A.prClose = () => { if (P) { P.pr = null; renderPlayer(); } };
 A.programRestore = el => { const sp = S.savedPrograms[+el.dataset.i]; if (!confirm(`Switch back to ${sp.name}?`)) return; useProgram(sp.program, sp.tid, sp.name); };
 
 // meal calculator actions
@@ -2109,7 +2253,7 @@ async function restorePDF() {
   S = obj.data; normalize(); Sync.meta.hash = {}; save(); buildEx(); await idb.clear(); for (const [k, v] of Object.entries(obj.photos || {})) await idb.put(k, v);
   toast('Backup restored.'); route = { tab: 'today', sub: {} }; render();
 }
-window.__gf = { extractBackup, targets, suggest, plannedFor, today, catchUps, stockInfo, groceryWeek, adaptive, navyBF, closeGap, growth, foodSearch, get S() { return S; }, get P() { return P; }, EX };
+window.__gf = { extractBackup, targets, suggest, plannedFor, today, catchUps, weekGoal, weekStreak, gymReminderText, gymTick, runPlan, prEvents, planKcal, stockInfo, groceryWeek, adaptive, navyBF, closeGap, growth, foodSearch, get S() { return S; }, get P() { return P; }, EX };
 
 // ---------- start ----------
 function stepsFromUrl() {
