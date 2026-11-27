@@ -228,20 +228,21 @@ function groceryWeek() {
 
 // ---------- training ----------
 const e1rm = (w, r) => (w > 0 ? w * (1 + r / 30) : r);
-function exHistory(exId, before) {
-  const out = [];
+function exHistory(exId, before, tmax) {
+  const out = [], byT = [];
   for (const d of Object.keys(S.sessions).sort()) {
     if (before && d >= before) continue;
     if (S.sessions[d].deload) continue; // deload days never count as strength data
     for (const e of S.sessions[d].entries) if (e.ex === exId) {
       const sets = e.sets.filter(x => x.done && num(x.r) > 0).map(x => ({ w: num(x.w) || 0, r: num(x.r) }));
-      if (sets.length) out.push({ date: d, sets, best: Math.max(...sets.map(s => e1rm(s.w, s.r))) });
+      if (sets.length) { const row = { date: d, sets, best: Math.max(...sets.map(s => e1rm(s.w, s.r))) }; out.push(row); if (tmax && e.t && e.t.max === tmax) byT.push(row); }
     }
   }
-  return out;
+  // same exercise on a heavy day and a light day (e.g. Smith squat 6–10 and 10–15): suggest from the matching rep range
+  return tmax && byT.length && byT.length < out.length && out.some(x => !byT.includes(x)) ? byT : out;
 }
 function suggest(item, date) {
-  const e = ex(item.ex), h = exHistory(item.ex, date);
+  const e = ex(item.ex), h = exHistory(item.ex, date, item.max);
   if (!h.length) return { w: null, kind: 'ok', text: `First time: choose a weight you can do for about ${item.max} reps with 1–2 reps left. Log it and the app takes over next time.` };
   const last = h[h.length - 1], topW = Math.max(...last.sets.map(s => s.w)), atTop = last.sets.filter(s => s.w === topW);
   const hitAll = atTop.length >= item.sets && atTop.every(s => s.r >= item.max);
@@ -763,7 +764,7 @@ VIEWS.today = () => {
     const run = S.runs.find(r => r.date === t);
     w += `<div class="row between" style="margin-top:4px"><div class="grow"><h2 style="margin:0">${esc(p.name)}</h2><div class="small muted">${run ? `${run.km} km in ${fmtTime(run.sec)} (${pace(run.sec, run.km)})` : `Target: ${nextLongRun()} km easy`}</div></div>${run ? `<span class="pill good">Done ✓</span>` : `<button class="btn primary sm" data-a="go" data-t="train" data-s="runs">Log run</button>`}</div>`;
     if (!run) w += workoutButtons(t, p, s);
-  } else w += `<h2 style="margin:4px 0 0">${esc(p.name)}</h2><div class="small muted">Recover. Walk, stretch, sleep well.</div>${workoutButtons(t, p, s)}`;
+  } else { const cu = catchUpBox(t); w += `<h2 style="margin:4px 0 0">${esc(p.name)}</h2><div class="small muted">${S.program.days[dow(t)] && S.program.days[dow(t)].catchup && !cu ? 'Nothing to catch up this week — enjoy the free day. Walk, stretch, sleep well.' : 'Recover. Walk, stretch, sleep well.'}</div>${cu}${workoutButtons(t, p, s)}`; }
   h += w + `</div>` + growthCard(false);
   const pg = proteinGap(t), gap = pg > 10 ? closeGap(pg) : null;
   h += `<div class="card tap" data-a="nutriHelp"><div class="row between"><div class="label">Nutrition · <span class="acc">tap for what to eat ›</span></div><button class="btn sm" data-a="logFood">+ Log food</button></div>${macroCard(t, T)}${gap ? `<div class="sug">Today's plan is ${pg} g protein short. Close the gap: ${esc(gap)}</div>` : ''}</div>`;
@@ -789,7 +790,7 @@ VIEWS.session = () => {
   const dLabel = `${fmtD(date)}${isToday ? ' · Today' : ''}`;
   if (!s) {
     if (p.type !== 'gym') {
-      h += `<div class="hero"><div class="label">${dLabel}</div><h2>${esc(p.name)}</h2><div class="small muted">${p.type === 'run' ? `Long-run target ${nextLongRun()} km at an easy pace.` : 'Recovery is when muscle is built. Walk, stretch, sleep.'}</div><div class="row" style="margin-top:14px">${p.type === 'run' ? `<button class="btn primary grow" data-a="sub" data-s="runs">Log run</button>` : ''}<button class="btn grow" data-a="switchDay" data-d="${date}">Train a gym workout instead</button></div>${date >= today() ? workoutButtons(date, p, null) : ''}</div>`;
+      h += `<div class="hero"><div class="label">${dLabel}</div><h2>${esc(p.name)}</h2><div class="small muted">${p.type === 'run' ? `Long-run target ${nextLongRun()} km at an easy pace.` : 'Recovery is when muscle is built. Walk, stretch, sleep.'}</div><div class="row" style="margin-top:14px">${p.type === 'run' ? `<button class="btn primary grow" data-a="sub" data-s="runs">Log run</button>` : ''}<button class="btn grow" data-a="switchDay" data-d="${date}">Train a gym workout instead</button></div>${date === today() ? catchUpBox(date) : ''}${date >= today() ? workoutButtons(date, p, null) : ''}</div>`;
       return h;
     }
     const items = p.items, sets = items.reduce((a, i) => a + i.sets, 0);
@@ -882,6 +883,16 @@ function askReason(kind, date, cb) {
 function missedDays() { const out = []; for (let i = 1; i <= 7; i++) { const d = addD(today(), -i); if (d < S.created) break; if (dayStatus(d) === 'miss' && !(S.skips || {})[d]) out.push(d); } return out; }
 const deloadsLast7 = date => Object.keys(S.sessions).filter(d => d <= date && diffD(d, date) < 7 && S.sessions[d].deload).length;
 function nextRestDay(date) { for (let i = 1; i <= 7; i++) { const d = addD(date, i); if (!S.sessions[d] && !(S.moves || {})[d] && dayPick[d] == null && planned(d).type === 'rest') return d; } return null; }
+// free "catch-up" day: offer the gym workouts missed earlier this week
+function catchUps(date) {
+  const d0 = S.program.days[dow(date)]; if (!d0 || !d0.catchup || S.sessions[date] || (S.moves || {})[date] || dayPick[date] != null) return [];
+  const out = []; for (let d = monOf(date); d < date; d = addD(d, 1)) { if ((S.moves || {})[d] || dayPick[d] != null) continue; const k = effKey(d); if (dayStatus(d) === 'miss' && S.program.days[k] && S.program.days[k].type === 'gym') out.push({ d, k }); }
+  return out;
+}
+function catchUpBox(date) {
+  const c = catchUps(date); if (!c.length) return '';
+  return `<div class="sug">🔁 <b>Catch-up day.</b> You missed ${c.map(x => `<b>${esc(S.program.days[x.k].name)}</b> (${fmtD(x.d)})`).join(' and ')} this week — do ${c.length > 1 ? 'one' : 'it'} today?<div class="row wrap" style="gap:6px;margin-top:8px">${c.map(x => `<button class="btn sm primary" data-a="catchUp" data-from="${x.d}" data-k="${x.k}" data-d="${date}">Do ${esc(S.program.days[x.k].name)}</button>`).join('')}</div></div>`;
+}
 function workoutButtons(date, p, s) {
   // extra choices under a not-yet-started workout card
   const m = (S.moves || {})[date], b = [];
@@ -901,7 +912,7 @@ function progStats(p) {
   for (const d of gym) for (const it of d.items) { const mu = ex(it.ex).muscle; m[mu] = (m[mu] || 0) + it.sets; }
   return { gym: gym.length, run: days.filter(d => d.type === 'run').length, min: gym.length ? Math.round(avg(gym.map(d => estMinutes(d.items)))) : 0, back: m.back || 0, delts: (m['side delts'] || 0) + (m['rear delts'] || 0), chest: m.chest || 0, legs: (m.quads || 0) + (m.hamstrings || 0) };
 }
-function rankedPrograms() { const order = ['ppl5', 'ul4', 'arnold5', 'fb3', 'original']; return order.map(id => window.PROGRAMS.find(p => p.id === id)).filter(p => p && p.id !== curPid()); }
+function rankedPrograms() { const order = ['ulv4', 'ppl5', 'ul4', 'arnold5', 'fb3', 'original']; return order.map(id => window.PROGRAMS.find(p => p.id === id)).filter(p => p && p.id !== curPid()); }
 function programSuggestCard(outgrown) {
   const top = rankedPrograms().slice(0, 2);
   return `<div class="card hl"><div class="label">${outgrown ? "You've outgrown this program — try one of these" : 'Progress is slowing — a new program could restart it'}</div>${top.map((p, i) => { const st = progStats(p.program); return `<div class="daycard" style="margin-top:8px" data-a="programPreview" data-id="${p.id}"><div class="dl">${st.gym}×</div><div class="grow"><b>${esc(p.name)}</b>${i === 0 ? ' <span class="pill good">Recommended</span>' : ''}<div class="tiny muted">${esc(p.when)} · ~${st.min} min</div></div><span class="chev">›</span></div>`; }).join('')}<button class="linkbtn" data-a="programs">See all programs ›</button></div>`;
@@ -1133,11 +1144,11 @@ VIEWS.checkin = () => {
 VIEWS.profile = () => {
   const p = S.profile, T = targets();
   return `<div class="card accent"><h3>Your daily targets</h3><div class="kpis"><div class="kpi"><b>${T.kcal}</b><span>kcal</span></div><div class="kpi"><b>${T.protein} g</b><span>protein</span></div><div class="kpi"><b>${T.carbs} g</b><span>carbs</span></div><div class="kpi"><b>${T.fat} g</b><span>fat</span></div></div>
-  <div class="small muted" style="margin-top:10px">${esc(T.formula)}: BMR ${T.bmr} kcal × activity ${p.activity} = ${T.tdee} kcal maintenance. Goal: ${esc(GOALS[p.goal])}${p.kcalOffset ? ` · check-in adjustment ${p.kcalOffset > 0 ? '+' : ''}${p.kcalOffset} kcal` : ''}. Protein ${PROT_K[p.goal]} g/kg, fat 0.9 g/kg, carbs fill the rest. Using weight ${r1(T.w)} kg.</div></div>
+  <div class="small muted" style="margin-top:10px">${esc(T.formula)}: BMR ${T.bmr} kcal × activity ${p.activity} = ${T.tdee} kcal maintenance. Goal: ${esc(GOALS[p.goal])}${p.kcalOffset ? ` · calorie adjustment ${p.kcalOffset > 0 ? '+' : ''}${p.kcalOffset} kcal` : ''}. Protein ${PROT_K[p.goal]} g/kg, fat 0.9 g/kg, carbs fill the rest. Using weight ${r1(T.w)} kg.</div></div>
   <div class="card"><h3>Profile</h3><div class="grid2"><div><label class="f">Age</label><input type="number" data-c="prof" data-f="age" value="${p.age}"></div><div><label class="f">Height (cm)</label><input type="number" data-c="prof" data-f="heightCm" value="${p.heightCm}"></div>
   <div><label class="f">Starting weight (kg)</label><input type="number" step="0.1" data-c="prof" data-f="baseWeight" value="${p.baseWeight}"></div><div><label class="f">Goal</label><select data-c="prof" data-f="goal">${Object.entries(GOALS).map(([k, v]) => `<option value="${k}" ${p.goal === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
   <label class="f">Activity level</label><select data-c="prof" data-f="activity"><option value="1.375" ${p.activity == 1.375 ? 'selected' : ''}>Light — 3–4 training days</option><option value="1.55" ${p.activity == 1.55 ? 'selected' : ''}>Moderate — 5–6 training days</option><option value="1.725" ${p.activity == 1.725 ? 'selected' : ''}>Very active — daily training + active job</option></select></div>
-  <div class="card"><h3>Manual overrides</h3><div class="small muted">Leave empty to use the automatic numbers.</div><div class="grid3"><div><label class="f">kcal</label><input type="number" data-c="ovr" data-f="kcal" value="${S.overrides.kcal ?? ''}"></div><div><label class="f">Protein g</label><input type="number" data-c="ovr" data-f="protein" value="${S.overrides.protein ?? ''}"></div><div><label class="f">Fat g</label><input type="number" data-c="ovr" data-f="fat" value="${S.overrides.fat ?? ''}"></div></div>${p.kcalOffset ? `<button class="btn sm" style="margin-top:10px" data-a="resetOffset">Reset check-in adjustment (${p.kcalOffset} kcal)</button>` : ''}</div>
+  <div class="card"><h3>Manual overrides</h3><div class="small muted">Leave empty to use the automatic numbers.</div><div class="grid3"><div><label class="f">kcal</label><input type="number" data-c="ovr" data-f="kcal" value="${S.overrides.kcal ?? ''}"></div><div><label class="f">Protein g</label><input type="number" data-c="ovr" data-f="protein" value="${S.overrides.protein ?? ''}"></div><div><label class="f">Fat g</label><input type="number" data-c="ovr" data-f="fat" value="${S.overrides.fat ?? ''}"></div></div>${p.kcalOffset ? `<button class="btn sm" style="margin-top:10px" data-a="resetOffset">Reset calorie adjustment (${p.kcalOffset} kcal)</button>` : ''}</div>
   <div class="card"><h3>Appearance</h3><div class="seg">${[['light', 'Light'], ['dark', 'Dark'], ['auto', 'Match phone']].map(([k, l]) => `<button class="${(S.settings.theme || 'light') === k ? 'on' : ''}" data-a="theme" data-v="${k}">${l}</button>`).join('')}</div></div>
   <div class="card"><h3>Daily habits & workout player</h3><div class="grid3"><div><label class="f">Water goal (L)</label><input type="number" step="0.1" data-c="waterGoal" value="${S.settings.waterGoalL ?? ''}" placeholder="auto ${r1(waterGoal(today()) / 1000)}"></div><div><label class="f">Bottle (oz)</label><input type="number" data-c="set" data-f="bottleOz" value="${S.settings.bottleOz}"></div><div><label class="f">Steps target</label><input type="number" data-c="set" data-f="stepsTarget" value="${S.settings.stepsTarget}"></div></div><div class="grid2"><div><label class="f">Rest, big lifts (sec)</label><input type="number" data-c="set" data-f="restC" value="${S.settings.restC}"></div><div><label class="f">Rest, isolation (sec)</label><input type="number" data-c="set" data-f="restI" value="${S.settings.restI}"></div></div><label class="small muted cb"><input type="checkbox" data-c="sound" ${S.settings.sound ? 'checked' : ''}> Beep when rest is over</label><label class="f">Hands-free: seconds per set</label><input type="number" data-c="set" data-f="setSec" value="${S.settings.setSec || 40}"><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="autoFlow" ${S.settings.autoFlow ? 'checked' : ''}> Auto-continue workout (no taps between exercises)</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="notify" ${S.settings.notify ? 'checked' : ''}> Lock-screen timer & alarm notifications</label><label class="small muted cb"><input type="checkbox" data-c="tgl" data-f="bgAudio" ${S.settings.bgAudio ? 'checked' : ''}> Extra-reliable timer with screen off (plays silent audio — <b>pauses Spotify/YouTube music</b>)</label><label class="f">Check-in reminder</label><div class="seg">${[[14, 'Every 2 weeks'], [28, 'Every 4 weeks']].map(([v, l]) => `<button class="${(S.settings.checkinDays || 28) === v ? 'on' : ''}" data-a="ciEvery" data-v="${v}">${l}</button>`).join('')}</div></div>${saveBtn()}`;
 };
@@ -2011,9 +2022,14 @@ A.programPreview = el => {
   openModal(`<div class="row between"><h2 style="margin:0">${esc(p.name)}</h2><button class="iconbtn" data-a="programs" aria-label="Back">‹</button></div><div class="small muted" style="margin:4px 0 10px">${esc(p.blurb)}</div>
   <div class="kpis"><div class="kpi"><b>${st.gym}</b><span>gym days (now ${cur.gym})</span></div><div class="kpi"><b>~${st.min}</b><span>min per session</span></div><div class="kpi"><b>${st.back}</b><span>back sets/wk (now ${cur.back})</span></div><div class="kpi"><b>${st.delts}</b><span>shoulder sets/wk (now ${cur.delts})</span></div></div>` +
     [1, 2, 3, 4, 5, 6, 0].map(k => { const d = p.program.days[k]; return `<div class="check"><b style="width:40px">${DN[k]}</b><div class="grow"><b>${esc(d.name)}</b>${d.items.length ? `<div class="tiny muted">${d.items.map(i => `${esc(ex(i.ex).name)} ${i.sets}×${i.min}–${i.max}`).join(' · ')}</div>` : ''}</div></div>`; }).join('') +
-    (p.id === curPid() ? '<div class="sug">This is your current program.</div>' : `<button class="btn primary block big-btn" style="margin-top:12px" data-a="programUse" data-id="${p.id}">Switch to this program</button><div class="tiny faint" style="margin-top:6px">Starts this week. Today's workout updates if you haven't started it. You can switch back any time.</div>`));
+    (p.id === curPid() ? '<div class="sug">This is your current program.</div>' : `${p.kcalTip ? `<label class="small cb" style="margin-top:12px"><input type="checkbox" id="pgKcal" checked> Also lower my daily calories by ${-p.kcalTip} kcal (faster fat loss around the waist — now ${targets().kcal}, would be ${targets().kcal + p.kcalTip})</label>` : ''}<button class="btn primary block big-btn" style="margin-top:12px" data-a="programUse" data-id="${p.id}">Switch to this program</button><div class="tiny faint" style="margin-top:6px">Starts this week. Today's workout updates if you haven't started it. You can switch back any time.</div>`));
 };
-A.programUse = el => { const p = window.PROGRAMS.find(x => x.id === el.dataset.id); if (!confirm(`Switch to ${p.name}? Your current split is saved so you can switch back.`)) return; useProgram(p.program, p.id, p.name); };
+A.programUse = el => { const p = window.PROGRAMS.find(x => x.id === el.dataset.id), cut = p.kcalTip && $('#pgKcal') && $('#pgKcal').checked; if (!confirm(`Switch to ${p.name}? Your current split is saved so you can switch back.`)) return; if (cut) S.profile.kcalOffset = (S.profile.kcalOffset || 0) + p.kcalTip; useProgram(p.program, p.id, p.name); if (cut) toast(`Now on ${p.name} · calories ${targets().kcal} kcal/day`); };
+A.catchUp = el => {
+  const from = el.dataset.from, k = +el.dataset.k, d = el.dataset.d; S.moves = S.moves || {};
+  S.moves[from] = { rest: true, to: d, k0: k }; S.moves[d] = { k, from }; delete S.sessions[d];
+  save(); render(true); toast(`🔁 ${S.program.days[k].name} moved to today — ${fmtD(from)} counts as rest`);
+};
 A.programRestore = el => { const sp = S.savedPrograms[+el.dataset.i]; if (!confirm(`Switch back to ${sp.name}?`)) return; useProgram(sp.program, sp.tid, sp.name); };
 
 // meal calculator actions
@@ -2093,7 +2109,7 @@ async function restorePDF() {
   S = obj.data; normalize(); Sync.meta.hash = {}; save(); buildEx(); await idb.clear(); for (const [k, v] of Object.entries(obj.photos || {})) await idb.put(k, v);
   toast('Backup restored.'); route = { tab: 'today', sub: {} }; render();
 }
-window.__gf = { extractBackup, targets, suggest, stockInfo, groceryWeek, adaptive, navyBF, closeGap, growth, foodSearch, get S() { return S; }, get P() { return P; }, EX };
+window.__gf = { extractBackup, targets, suggest, plannedFor, today, catchUps, stockInfo, groceryWeek, adaptive, navyBF, closeGap, growth, foodSearch, get S() { return S; }, get P() { return P; }, EX };
 
 // ---------- start ----------
 function stepsFromUrl() {

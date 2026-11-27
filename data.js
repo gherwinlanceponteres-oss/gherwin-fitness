@@ -252,7 +252,17 @@ window.QUOTES = [
   const D = (name, list) => ({ type: 'gym', name, items: list.map(([ex, sets, min, max]) => ({ ex, sets, min, max })) });
   const RUN = { type: 'run', name: 'Cardio — run', items: [] }, REST = { type: 'rest', name: 'Rest', items: [] };
   const LEGS = D('Legs + abs', [['smith_squat', 3, 6, 10], ['smith_rdl', 3, 8, 10], ['leg_ext', 3, 10, 15], ['leg_curl', 3, 10, 15], ['calf', 4, 10, 15], ['hanging_knee', 3, 10, 15]]);
+  const SS = (ex, sets, min, max) => ({ ex, sets, min, max, ss: true }), I = (ex, sets, min, max) => ({ ex, sets, min, max });
   window.PROGRAMS = [
+    { id: 'ulv4', name: 'Upper / Lower — V-taper', when: '4 gym days (Mon–Thu) + Fri catch-up + run', kcalTip: -300,
+      blurb: 'Built from your own exercises and your calendar: all training Mon–Thu (your most consistent days), legs early in the week, every muscle twice a week, extra side- and rear-delt work for the V-taper, abs twice a week. Friday is a free catch-up day — the app offers any workout you missed. Each session fits in about an hour (arms and fly are supersets).',
+      program: { deloadEvery: 8, days: {
+        1: { type: 'gym', name: 'Upper A (heavy)', items: [I('db_bench', 3, 6, 10), I('cs_row', 3, 8, 12), I('db_ohp', 3, 8, 12), I('lat_pd', 3, 8, 12), I('seated_lat', 4, 12, 20), SS('oh_ext', 3, 10, 15), I('hammer', 3, 10, 12)] },
+        2: { type: 'gym', name: 'Lower A + abs', items: [I('smith_squat', 4, 6, 10), I('smith_rdl', 3, 8, 10), I('leg_curl', 3, 10, 15), I('calf', 3, 10, 15), I('hanging_leg', 3, 10, 15)] },
+        3: { type: 'gym', name: 'Upper B (V-taper)', items: [I('incline_db', 3, 8, 12), I('pullup', 3, 5, 10), I('db_row', 3, 8, 12), I('lat_raise', 4, 12, 20), SS('db_fly', 2, 10, 15), I('rear_fly', 3, 12, 20), SS('pushdown', 2, 12, 15), I('incline_curl', 3, 10, 12)] },
+        4: { type: 'gym', name: 'Lower B + abs', items: [I('smith_squat', 3, 10, 15), I('leg_ext', 3, 10, 15), I('leg_curl', 3, 10, 15), I('back_ext', 3, 10, 15), I('x_Cable_Seated_Crunch', 3, 10, 15), I('plank', 2, 30, 60)] },
+        5: { type: 'rest', name: 'Free day / catch-up', items: [], catchup: true },
+        6: RUN, 0: REST } } },
     { id: 'ppl5', name: 'Push / Pull / Legs + Upper', when: '5 gym days + run', blurb: 'Every muscle twice a week, extra shoulder and back work for the V-taper. Best next step when a once-a-week split stops working.',
       program: { days: {
         1: D('Push', [['db_bench', 3, 6, 10], ['db_ohp', 3, 8, 12], ['incline_db', 3, 8, 12], ['lat_raise', 5, 12, 20], ['oh_ext', 3, 10, 15], ['pushdown', 2, 12, 15]]),

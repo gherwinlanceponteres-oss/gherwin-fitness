@@ -1,7 +1,7 @@
 // Gherwin Fitness service worker — saves the app on the phone so it opens with no internet.
 // Hosts like Cloudflare redirect /index.html -> /. A saved *redirect* can't be shown offline (Chrome: ERR_FAILED),
 // so every response is stored as a clean copy, and the page itself is always saved under "./".
-const VERSION = 'gf-v16';
+const VERSION = 'gf-v17';
 const FILES = [
  "./",
  "styles.css",
